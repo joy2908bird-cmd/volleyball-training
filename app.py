@@ -144,6 +144,36 @@ def _set_current_student(student: dict) -> None:
 
 def render_login():
     """身分選擇頁：學員輸入名字進入自己的頁面；教練輸入後台密碼管理全部。"""
+    # 登入頁專用樣式：置中、限制寬度、放大欄位/按鈕/字級（手機友善）。
+    # 只在登入頁注入，登入後其他頁不受影響。
+    st.markdown(
+        """
+        <style>
+        section.main > div.block-container {
+            max-width: 540px; margin: 0 auto; padding-top: 2.2rem;
+        }
+        /* 放大輸入框 */
+        .stTextInput input {
+            font-size: 1.15rem !important; padding: 0.85rem 0.9rem !important;
+            height: 3.2rem !important;
+        }
+        .stTextInput label p { font-size: 1.05rem !important; }
+        /* 放大按鈕、加大點擊區 */
+        .stButton > button {
+            font-size: 1.2rem !important; padding: 0.85rem 1rem !important;
+            min-height: 3.2rem; border-radius: 12px;
+        }
+        /* 分頁標籤放大好點 */
+        .stTabs [data-baseweb="tab"] { font-size: 1.1rem; padding: 0.6rem 1rem; }
+        /* 手機再加大一點 */
+        @media (max-width: 640px) {
+            section.main > div.block-container { padding-left: 1rem; padding-right: 1rem; }
+            h1 { font-size: 1.8rem !important; text-align: center; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown("# 🏐 排球訓練小幫手")
     st.markdown("")
 
@@ -192,6 +222,9 @@ def render_login():
             else:
                 st.session_state.role = "student"
                 _set_current_student(student)
+                # 把身分寫進網址，手機斷線/鎖屏/重整時自動還原，不必重新登入
+                st.query_params["role"] = "student"
+                st.query_params["name"] = student["name"]
                 st.rerun()
 
     with tab_coach:
@@ -1055,6 +1088,32 @@ def render_competition_manager():
                     st.warning("請填比賽名稱。")
 
 
+def render_upcoming_competitions():
+    """功能 D：學生側欄唯讀顯示近期比賽（只看得到，不能改）。"""
+    comps = get_competitions()
+    today = date.today()
+    upcoming = []
+    for c in comps:
+        raw = c.get("event_date")
+        if not raw:
+            continue
+        try:
+            d = date.fromisoformat(str(raw)[:10])
+        except ValueError:
+            continue
+        if d >= today:
+            upcoming.append((d, c))
+    if not upcoming:
+        return
+    upcoming.sort(key=lambda x: x[0])
+    st.markdown("### 🗓️ 近期比賽")
+    for d, c in upcoming[:5]:
+        days = (d - today).days
+        when = "🔥 就是今天！" if days == 0 else f"還有 {days} 天"
+        st.markdown(f"📅 **{c.get('event_date','')}**　{c.get('name','')}")
+        st.caption(when)
+
+
 def render_phase_reminder(phase_info: dict):
     """功能 D：生成菜單前的階段提醒橫幅（所有人可見）。"""
     comp = phase_info.get("competition")
@@ -1849,6 +1908,16 @@ def main():
     if "adding_student" not in st.session_state:
         st.session_state.adding_student = False        # 教練後台是否正在新增學員
 
+    # ── 斷線還原：手機鎖屏/切App/網路切換導致 session 清空時，從網址參數還原學生身分 ──
+    # （只還原學生，不還原教練：教練屬敏感權限，重連時請重新輸入密碼）
+    if st.session_state.role is None and st.query_params.get("role") == "student":
+        nm = st.query_params.get("name")
+        if nm:
+            stu = get_student_by_name(nm)
+            if stu:
+                st.session_state.role = "student"
+                _set_current_student(stu)
+
     # ── 身分登入（學員 / 教練後台） ──────────────────────────
     if st.session_state.role is None:
         render_login()
@@ -1943,6 +2012,9 @@ def main():
                     st.session_state.editing_profile = False
                     st.session_state.confirm_delete = False
                     st.session_state.adding_student = False
+                    # 一併寫入網址身分，交給小朋友後斷線也能自動還原
+                    st.query_params["role"] = "student"
+                    st.query_params["name"] = s["name"]
                     st.rerun()
                 st.caption("切過去後，左下角「登出」再用教練密碼即可回後台。")
                 ec1, ec2 = st.columns(2)
@@ -1975,6 +2047,10 @@ def main():
                         st.session_state.confirm_delete = False
                         st.rerun()
 
+        # 學生端：唯讀顯示近期比賽（賽事由教練維護）
+        if not is_admin:
+            render_upcoming_competitions()
+
         st.markdown("---")
         if st.button("🚪 登出", use_container_width=True):
             st.session_state.role = None
@@ -1982,6 +2058,7 @@ def main():
             st.session_state.curriculum = None
             st.session_state.editing_profile = False
             st.session_state.confirm_delete = False
+            st.query_params.clear()  # 清掉網址身分，登出後不會被自動還原
             st.rerun()
 
     # ── 主內容區 ────────────────────────────────────────────
