@@ -1740,6 +1740,14 @@ def main():
             # 教練後台：編輯 / 刪除學員
             if is_admin:
                 st.markdown("")
+                # 一鍵切換成「這位學生的畫面」（把裝置交給小朋友，或檢視他看到的樣子）
+                if st.button("👦 切換成這位學生的畫面", use_container_width=True, type="primary"):
+                    st.session_state.role = "student"
+                    st.session_state.editing_profile = False
+                    st.session_state.confirm_delete = False
+                    st.session_state.adding_student = False
+                    st.rerun()
+                st.caption("切過去後，左下角「登出」再用教練密碼即可回後台。")
                 ec1, ec2 = st.columns(2)
                 if ec1.button("✏️ 編輯資料", use_container_width=True):
                     st.session_state.editing_profile = True
