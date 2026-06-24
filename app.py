@@ -1090,10 +1090,7 @@ def render_generate_menu(student: dict):
         st.session_state.editing_profile = True
         st.rerun()
 
-    # 功能 D：賽事行事曆（教練可在此維護）+ 階段提醒
-    is_admin = st.session_state.get("role") == "admin"
-    if is_admin:
-        render_competition_manager()
+    # 功能 D：賽事階段提醒（賽事行事曆改在教練側欄維護，避免重複表單；此處只顯示提醒）
     phase_info = compute_training_phase(get_competitions())
     render_phase_reminder(phase_info)
 
@@ -1911,6 +1908,10 @@ def main():
             st.session_state.editing_profile = False
             st.session_state.confirm_delete = False
             st.rerun()
+
+        # 功能 D：賽事行事曆（全隊共用，教練隨時可在側欄維護）
+        if is_admin:
+            render_competition_manager()
 
         # 學員小名片
         if st.session_state.current_student:
