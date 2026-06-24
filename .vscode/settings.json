@@ -1,0 +1,22 @@
+{
+  // Python 直譯器：優先使用本地 venv，否則系統 python3
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+
+  // 存檔自動格式化
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.rulers": [88]
+  },
+
+  // 終端機預設從專案根目錄開啟
+  "terminal.integrated.cwd": "${workspaceFolder}",
+
+  // 排除不需要顯示的資料夾
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/.venv": true
+  }
+}
