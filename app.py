@@ -471,6 +471,86 @@ def create_session_log(student_id: int, week_number: int, day_number: int) -> di
     return result.data[0]
 
 
+def get_point_events(student_id: int) -> list[dict]:
+    """取得額外積分紀錄；point_events 未建好時回空清單，避免影響訓練。"""
+    try:
+        result = (
+            supabase.table("point_events")
+            .select("*")
+            .eq("student_id", student_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        print(f"[WARN] 讀取 point_events 失敗（可能尚未執行 migrate_v7.sql）: {e}")
+        return []
+
+
+def add_point_event(
+    student_id: int,
+    points: int,
+    reason: str,
+    note: str = "",
+    event_type: str = "manual",
+    event_key: str | None = None,
+    created_by: str = "coach",
+) -> bool:
+    """新增一筆額外積分；自動獎勵用 event_key 防重複。"""
+    data = {
+        "student_id": student_id,
+        "points": points,
+        "reason": reason,
+        "note": note,
+        "event_type": event_type,
+        "event_key": event_key,
+        "created_by": created_by,
+    }
+    try:
+        supabase.table("point_events").insert(data).execute()
+        return True
+    except Exception as e:
+        # unique event_key 衝突代表已發過，不視為錯誤
+        print(f"[WARN] 新增積分紀錄失敗或已存在: {e}")
+        return False
+
+
+def point_events_total(events: list[dict]) -> int:
+    return sum(e.get("points") or 0 for e in events)
+
+
+def training_score_total(logs: list[dict]) -> int:
+    return sum(l.get("score") or 0 for l in logs)
+
+
+def total_score(logs: list[dict], point_events: list[dict]) -> int:
+    return training_score_total(logs) + point_events_total(point_events)
+
+
+def ensure_auto_point_rewards(student: dict, logs: list[dict]) -> None:
+    """依目前完成進度補發自動里程碑獎勵；每套菜單每種獎勵只發一次。"""
+    plan_key = str(student.get("plan_started_at") or student.get("created_at") or "no_plan")
+    done = completed_sessions(logs)
+    if done >= 5:
+        add_point_event(
+            student["id"], 15,
+            "連續完成 5 天獎勵",
+            "同一套菜單累積完成 5 個訓練日",
+            event_type="auto_reward",
+            event_key=f"{plan_key}:complete_5_days",
+            created_by="system",
+        )
+    if done >= 15:
+        add_point_event(
+            student["id"], 20,
+            "連續完成 3 週獎勵",
+            "同一套菜單累積完成 15 個訓練日",
+            event_type="auto_reward",
+            event_key=f"{plan_key}:complete_3_weeks",
+            created_by="system",
+        )
+
+
 def upload_video_to_supabase(student_id: int, video_bytes: bytes, filename: str) -> str:
     """上傳影片至 Supabase Storage，回傳公開網址"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -977,18 +1057,22 @@ def is_plan_finished(student: dict, logs: list[dict]) -> bool:
     return completed_sessions(logs) >= total_weeks * DAYS_PER_WEEK
 
 
-def calculate_stats(student: dict, logs: list[dict]) -> dict:
+def calculate_stats(student: dict, logs: list[dict], point_events: list[dict] | None = None) -> dict:
     """計算訓練統計數字"""
+    point_events = point_events or []
     total_training_days = (student.get("total_weeks") or 1) * DAYS_PER_WEEK  # 每週 5 個訓練日
     completed_n = completed_sessions(logs)  # 以 (週,天) 去重的完成天數
-    total_score = sum(l.get("score") or 0 for l in logs)
+    training_score = training_score_total(logs)
+    bonus_score = point_events_total(point_events)
     progress_pct = min(completed_n / total_training_days * 100, 100) if total_training_days else 0
 
     return {
         "completed_days": completed_n,
         "total_training_days": total_training_days,
         "progress_pct": progress_pct,
-        "total_score": total_score,
+        "training_score": training_score,
+        "bonus_score": bonus_score,
+        "total_score": training_score + bonus_score,
     }
 
 
@@ -1360,10 +1444,12 @@ _SESSION_HTML = r"""
       ctr.innerHTML = '<button id="pp">⏸ 暫停</button>'
         + '<button id="rs" class="sec">↺ 本組重來</button>'
         + '<button id="ns" class="sec" disabled>下一組 →</button>'
+        + '<button id="prev" class="sec">← 上一項</button>'
         + '<button id="nx" class="sec">下一項 →</button>';
       $('pp').onclick = togglePause;
       $('rs').onclick = function(){ remaining = it.seconds|0; timer.textContent = fmt(remaining); startTimer(); };
       $('ns').onclick = function(){ remaining = it.seconds|0; timer.textContent = fmt(remaining); startTimer(); this.disabled = true; };
+      $('prev').onclick = prev;
       $('nx').onclick = next;
       startTimer();
     } else {
@@ -1371,7 +1457,9 @@ _SESSION_HTML = r"""
       const sets = it.sets||1;
       drawReps(it);
       ctr.innerHTML = '<button id="ok">✓ 完成一組</button>'
+        + '<button id="prev" class="sec">← 上一項</button>'
         + '<button id="nx" class="sec">下一項 →</button>';
+      $('prev').onclick = prev;
       $('nx').onclick = next;
       $('ok').onclick = function(){
         if(setsDone < sets){ setsDone++; drawReps(it); }
@@ -1431,8 +1519,19 @@ _SESSION_HTML = r"""
     }, 1000);
   }
   function togglePause(){ paused=!paused; $('pp').textContent = paused ? '▶ 繼續' : '⏸ 暫停'; }
-  function next(){ clearInterval(timerId); idx++; showItem(); }
-  function finish(){ clearInterval(timerId); $('session').style.display='none'; $('done').style.display='block'; alertFinish(); }
+  function prev(){ clearInterval(timerId); idx = Math.max(0, idx-1); showItem(); }
+  function next(){
+    clearInterval(timerId);
+    if(!confirm('確定要前往下一項嗎？如果這一項還沒做完，請按「取消」回來繼續。')) return;
+    idx++; showItem();
+  }
+  function finish(){
+    clearInterval(timerId);
+    if(!confirm('今天全部項目都做完了嗎？確認後再去打卡領積分。')){
+      idx = Math.max(0, ITEMS.length-1); showItem(); return;
+    }
+    $('session').style.display='none'; $('done').style.display='block'; alertFinish();
+  }
 })();
 </script>
 """
@@ -1514,6 +1613,15 @@ def _read_panel_items(week_num: int, day_id: int, item_count: int) -> list[dict]
     return new_items
 
 
+def _move_item(items: list[dict], from_idx: int, to_idx: int) -> list[dict]:
+    new_items = list(items)
+    if from_idx < 0 or from_idx >= len(new_items) or to_idx < 0 or to_idx >= len(new_items):
+        return new_items
+    item = new_items.pop(from_idx)
+    new_items.insert(to_idx, item)
+    return new_items
+
+
 def render_day_editor(student: dict, curriculum: dict, week_num: int, day: dict) -> None:
     """用面板微調某一天的項目（改秒數/次數/組數、增刪項目）。教練與家長皆可用。"""
     if not st.toggle("✏️ 編輯這天的份量 / 項目", key=f"edit_w{week_num}_d{day['day']}"):
@@ -1544,9 +1652,17 @@ def render_day_editor(student: dict, curriculum: dict, week_num: int, day: dict)
         _ensure_editor_value(note_key, it.get("note", ""))
 
         with st.container(border=True):
-            top_a, top_b = st.columns([3, 1])
+            top_a, top_up, top_down, top_del = st.columns([3, 1, 1, 1])
             top_a.text_input("動作名稱", key=name_key, placeholder="例：對牆低手墊球")
-            if top_b.button("🗑️ 刪除", key=_editor_key(week_num, day_id, idx, "delete"), use_container_width=True):
+            if top_up.button("↑ 上移", key=_editor_key(week_num, day_id, idx, "move_up"), use_container_width=True, disabled=(idx == 0)):
+                current_items = _read_panel_items(week_num, day_id, len(items))
+                _save_day_items(student, curriculum, week_num, day, _move_item(current_items, idx, idx - 1))
+                return
+            if top_down.button("↓ 下移", key=_editor_key(week_num, day_id, idx, "move_down"), use_container_width=True, disabled=(idx == len(items) - 1)):
+                current_items = _read_panel_items(week_num, day_id, len(items))
+                _save_day_items(student, curriculum, week_num, day, _move_item(current_items, idx, idx + 1))
+                return
+            if top_del.button("🗑️ 刪除", key=_editor_key(week_num, day_id, idx, "delete"), use_container_width=True):
                 new_items = _read_panel_items(week_num, day_id, len(items))
                 if idx < len(new_items):
                     new_items.pop(idx)
@@ -1772,11 +1888,20 @@ def render_ai_feedback_card(feedback: dict):
     st.info(f"🏐 **排球小知識**：{feedback.get('fun_fact', '')}")
 
 
-def render_checkin(student: dict, logs: list[dict]):
-    """今日完成總覽：列出今天打卡的天數與 AI 回饋（打卡動作改在「訓練菜單」每天各自進行）"""
+def render_checkin(student: dict, logs: list[dict], point_events: list[dict] | None = None):
+    """今日完成總覽：列出今天打卡的天數與獎勵積分制度。"""
+    point_events = point_events or []
     today = date.today()
     today_str = today.isoformat()
     st.markdown(f"📅 今天是 **{today.strftime('%Y 年 %m 月 %d 日')}**")
+
+    with st.container(border=True):
+        st.markdown("#### 🎁 獎勵積分制度")
+        r1, r2, r3 = st.columns(3)
+        r1.metric("完成 5 天", "+15")
+        r2.metric("完成 3 週", "+20")
+        r3.metric("比賽完畢", "+30")
+        st.caption("前兩項由系統依同一套菜單完成進度自動發放；比賽完畢由教練在後台加分。")
 
     today_logs = [
         l for l in logs
@@ -1785,16 +1910,37 @@ def render_checkin(student: dict, logs: list[dict]):
 
     if not today_logs:
         st.info("今天還沒完成任何一天喔！到「📋 訓練菜單」挑一天，跟著做完就打卡吧 💪")
-        return
+    else:
+        st.success(f"🌟 今天完成了 **{len(today_logs)}** 天訓練，超棒的！")
+        for l in sorted(today_logs, key=lambda x: (x.get("week_number") or 0, x.get("day_number") or 0)):
+            wk = l.get("week_number", "?")
+            dy = l.get("day_number")
+            title = f"第 {wk} 週・第 {dy} 天" if dy else f"第 {wk} 週"
+            st.markdown(f"#### ✅ {title}　⭐ {l.get('score', 10)} 分")
+            st.caption("訓練完成紀錄。想請 AI 看動作時，請到「🎥 影片助理教練」。")
+            st.markdown("---")
 
-    st.success(f"🌟 今天完成了 **{len(today_logs)}** 天訓練，超棒的！")
-    for l in sorted(today_logs, key=lambda x: (x.get("week_number") or 0, x.get("day_number") or 0)):
-        wk = l.get("week_number", "?")
-        dy = l.get("day_number")
-        title = f"第 {wk} 週・第 {dy} 天" if dy else f"第 {wk} 週"
-        st.markdown(f"#### ✅ {title}　⭐ {l.get('score', 10)} 分")
-        st.caption("訓練完成紀錄。想請 AI 看動作時，請到「🎥 影片助理教練」。")
-        st.markdown("---")
+    today_events = [
+        e for e in point_events
+        if str(e.get("created_at") or "")[:10] == today_str
+    ]
+    if today_events:
+        st.markdown("#### 🎉 今日獎勵積分")
+        for e in today_events:
+            pts = e.get("points") or 0
+            sign = "+" if pts >= 0 else ""
+            st.success(f"{sign}{pts} 分｜{e.get('reason', '')}")
+            if e.get("note"):
+                st.caption(e["note"])
+
+    if point_events:
+        with st.expander("📜 查看近期獎勵紀錄", expanded=False):
+            for e in point_events[:8]:
+                pts = e.get("points") or 0
+                sign = "+" if pts >= 0 else ""
+                st.markdown(f"**{(e.get('created_at') or '')[:10]}**　{sign}{pts} 分　{e.get('reason','')}")
+                if e.get("note"):
+                    st.caption(e["note"])
 
 
 def render_journal_form(student: dict, plan_key: str, week: int, readonly: bool = False) -> None:
@@ -1883,6 +2029,60 @@ def render_journal_tab(student: dict, current_week: int, logs: list[dict],
         )
 
 
+def render_point_manager(student: dict, logs: list[dict], point_events: list[dict]) -> None:
+    """教練後台：手動管理額外積分與查看積分紀錄。"""
+    training_points = training_score_total(logs)
+    bonus_points = point_events_total(point_events)
+    st.markdown("#### ⭐ 積分管理")
+    p1, p2, p3 = st.columns(3)
+    p1.metric("訓練分", training_points)
+    p2.metric("獎勵分", bonus_points)
+    p3.metric("目前總分", training_points + bonus_points)
+
+    st.markdown("##### 快速加分")
+    q1, q2, q3 = st.columns(3)
+    if q1.button("+30 比賽完畢", use_container_width=True):
+        if add_point_event(student["id"], 30, "比賽完畢獎勵", "教練確認已完成比賽", event_type="competition"):
+            st.success("已加 30 分")
+            st.rerun()
+    if q2.button("+10 教練鼓勵", use_container_width=True):
+        if add_point_event(student["id"], 10, "教練鼓勵", "訓練態度良好", event_type="coach_bonus"):
+            st.success("已加 10 分")
+            st.rerun()
+    if q3.button("+5 小幫手", use_container_width=True):
+        if add_point_event(student["id"], 5, "小幫手獎勵", "主動協助收拾或幫助隊友", event_type="coach_bonus"):
+            st.success("已加 5 分")
+            st.rerun()
+
+    with st.form(f"manual_points_{student['id']}", clear_on_submit=True):
+        st.markdown("##### 自訂加分 / 扣分")
+        c1, c2 = st.columns([1, 2])
+        points = c1.number_input("分數", min_value=-100, max_value=100, value=10, step=1)
+        reason = c2.selectbox(
+            "理由",
+            ["認真完成訓練", "寫日誌很用心", "影片動作有進步", "比賽完畢獎勵", "團隊精神", "教練特別獎勵", "其他"],
+        )
+        note = st.text_input("備註（選填）", placeholder="例：今天主動幫忙收球，也很認真完成棒式")
+        if st.form_submit_button("儲存積分紀錄", type="primary", use_container_width=True):
+            if points == 0:
+                st.warning("分數不能是 0。")
+            else:
+                if add_point_event(student["id"], int(points), reason, note, event_type="manual"):
+                    st.success("已儲存積分紀錄")
+                    st.rerun()
+
+    if point_events:
+        st.markdown("##### 近期積分紀錄")
+        for e in point_events[:10]:
+            pts = e.get("points") or 0
+            sign = "+" if pts >= 0 else ""
+            st.markdown(f"**{(e.get('created_at') or '')[:10]}**　{sign}{pts} 分　{e.get('reason','')}")
+            if e.get("note"):
+                st.caption(e["note"])
+    else:
+        st.caption("目前還沒有額外積分紀錄。")
+
+
 def render_body_metric_reminder(student: dict):
     """距上次紀錄滿 14 天 → 頂部溫和提示更新身高體重（非強制）"""
     days = days_since_last_metric(student["id"])
@@ -1910,9 +2110,10 @@ def render_body_metric_reminder(student: dict):
                 st.rerun()
 
 
-def render_progress(student: dict, logs: list[dict]):
+def render_progress(student: dict, logs: list[dict], point_events: list[dict] | None = None):
     """學員進度看板"""
-    stats = calculate_stats(student, logs)
+    point_events = point_events or []
+    stats = calculate_stats(student, logs, point_events)
     analyses = get_video_analyses(student["id"])
 
     # 進度條
@@ -1924,10 +2125,12 @@ def render_progress(student: dict, logs: list[dict]):
     )
 
     # 三格統計
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("📅 打卡天數", stats["completed_days"])
-    c2.metric("⭐ 累積積分", stats["total_score"])
-    c3.metric("🎥 AI 分析", len(analyses))
+    c2.metric("🏐 訓練分", stats["training_score"])
+    c3.metric("🎁 獎勵分", stats["bonus_score"])
+    c4.metric("⭐ 總積分", stats["total_score"])
+    st.caption(f"🎥 AI 分析：{len(analyses)} 次")
 
     # 成長曲線（身高 / 體重，需 ≥2 筆紀錄）
     metrics = get_body_metrics(student["id"])
@@ -2302,6 +2505,8 @@ def main():
         return
 
     logs = get_training_logs(student["id"])
+    ensure_auto_point_rewards(student, logs)
+    point_events = get_point_events(student["id"])
     plan_key = student.get("plan_started_at") or student["created_at"]
 
     # 2.5) 強制日誌關卡：完成的週若還沒寫日誌，學員必須先寫才能繼續（教練不擋）
@@ -2334,7 +2539,7 @@ def main():
     goal_text = student["target_skill"] if is_ball_mode else (student.get("training_mode") or "")
     st.caption(
         f"{goal_text}　｜　第 {current_week} / {student['total_weeks']} 週"
-        f"（做完 {completed_sessions(logs)} 次）　｜　累積 {sum(l.get('score',0) for l in logs)} 分"
+        f"（做完 {completed_sessions(logs)} 次）　｜　累積 {total_score(logs, point_events)} 分"
     )
 
     # 兩週身高體重提醒（滿 14 天才出現）
@@ -2370,6 +2575,9 @@ def main():
             st.markdown("#### 重新生成菜單")
             render_generate_menu(student)
 
+        with st.expander("⭐ 教練工具：積分管理"):
+            render_point_manager(student, logs, point_events)
+
     # 功能頁籤：影片助理教練為獨立功能，不綁訓練菜單或打卡
     tab_labels = ["📋 訓練菜單", "✅ 今日完成", "🎥 影片助理教練", "📊 我的進度", "📔 訓練日誌"]
     tabs = st.tabs(tab_labels)
@@ -2377,11 +2585,11 @@ def main():
     with tabs[0]:
         render_curriculum(curriculum, current_week, student, logs)
     with tabs[1]:
-        render_checkin(student, logs)
+        render_checkin(student, logs, point_events)
     with tabs[2]:
         render_video_coach(student)
     with tabs[3]:
-        render_progress(student, logs)
+        render_progress(student, logs, point_events)
     with tabs[4]:
         render_journal_tab(student, current_week, logs, plan_key, readonly=is_admin)
 

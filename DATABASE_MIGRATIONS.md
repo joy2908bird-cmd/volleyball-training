@@ -4,7 +4,7 @@
 
 ## Current Status
 
-- 最新 migration 檔案版本：`migrate_v6.sql`
+- 最新 migration 檔案版本：`migrate_v7.sql`
 - 正式環境目前已套用到哪一版：待確認
 - 新環境目前需要手動依序執行多個 SQL 檔，容易漏跑
 - 之後建議收斂成 `schema_latest.sql` 或 `migrations/` 目錄
@@ -21,6 +21,7 @@
 | 4 | `migrate_v4.sql` | 新增每週心得 / 照片紀錄 `weekly_journals`，並記錄 `journal-photos` bucket 的手動設定 |
 | 5 | `migrate_v5.sql` | 新增比賽資料表 `competitions` |
 | 6 | `migrate_v6.sql` | 新增影片分析紀錄 `video_analyses` |
+| 7 | `migrate_v7.sql` | 新增額外積分 / 獎勵紀錄 `point_events` |
 
 另有舊檔 `migration.sql`，目前看起來是早期 Supabase 初始化說明或舊版 schema。之後整理時要確認它是否仍需要保留，或改成歸檔。
 
@@ -35,6 +36,7 @@ migrate_v3.sql
 migrate_v4.sql
 migrate_v5.sql
 migrate_v6.sql
+migrate_v7.sql
 ```
 
 同時需要手動確認 Supabase Storage bucket：
@@ -79,6 +81,7 @@ migrations/
   004_weekly_journals.sql
   005_competitions.sql
   006_video_analyses.sql
+  007_point_events.sql
 ```
 
 README 或這份文件中固定維護：
@@ -98,4 +101,3 @@ README 或這份文件中固定維護：
 4. 決定要採用 `schema_latest.sql` 還是 `migrations/` 目錄。
 5. 若採用 `schema_latest.sql`，從現有正式 schema 或所有 migration 合併出一份最新完整 SQL。
 6. 若採用 `migrations/`，把現有 SQL 依版本重新命名，並在新增功能時只新增下一版 migration。
-
