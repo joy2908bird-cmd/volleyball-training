@@ -27,4 +27,11 @@ CREATE TABLE IF NOT EXISTS body_metrics (
 );
 
 -- MVP 測試期開放（與現有 students 一致，上線前再收緊）
-ALTER TABLE body_metrics DISABLE ROW LEVEL SECURITY;
+ALTER TABLE body_metrics ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "body_metrics_allow_app_access" ON body_metrics;
+CREATE POLICY "body_metrics_allow_app_access"
+ON body_metrics
+FOR ALL
+TO anon, authenticated
+USING (true)
+WITH CHECK (true);

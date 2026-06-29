@@ -34,6 +34,21 @@ CREATE TABLE IF NOT EXISTS training_logs (
 ALTER TABLE students ADD COLUMN IF NOT EXISTS equipment JSONB DEFAULT '["排球"]'::jsonb;
 ALTER TABLE students ADD COLUMN IF NOT EXISTS grade_level TEXT DEFAULT '中年級（三、四年級）';
 
--- 4) MVP 測試期暫時關閉資料表 RLS（上線前記得重新啟用並寫 policy）
-ALTER TABLE students DISABLE ROW LEVEL SECURITY;
-ALTER TABLE training_logs DISABLE ROW LEVEL SECURITY;
+-- 4) 啟用資料表 RLS，短期先用寬鬆 policy 維持現有功能（上線前再收緊）
+ALTER TABLE students ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "students_allow_app_access" ON students;
+CREATE POLICY "students_allow_app_access"
+ON students
+FOR ALL
+TO anon, authenticated
+USING (true)
+WITH CHECK (true);
+
+ALTER TABLE training_logs ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "training_logs_allow_app_access" ON training_logs;
+CREATE POLICY "training_logs_allow_app_access"
+ON training_logs
+FOR ALL
+TO anon, authenticated
+USING (true)
+WITH CHECK (true);

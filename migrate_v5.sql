@@ -13,4 +13,11 @@ CREATE TABLE IF NOT EXISTS competitions (
 );
 
 -- MVP 測試期開放（與其他表一致，上線前再收緊）
-ALTER TABLE competitions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE competitions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "competitions_allow_app_access" ON competitions;
+CREATE POLICY "competitions_allow_app_access"
+ON competitions
+FOR ALL
+TO anon, authenticated
+USING (true)
+WITH CHECK (true);

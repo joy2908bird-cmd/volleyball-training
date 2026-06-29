@@ -17,7 +17,14 @@ CREATE TABLE IF NOT EXISTS weekly_journals (
 );
 
 -- MVP 測試期開放（與其他表一致，上線前再收緊）
-ALTER TABLE weekly_journals DISABLE ROW LEVEL SECURITY;
+ALTER TABLE weekly_journals ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "weekly_journals_allow_app_access" ON weekly_journals;
+CREATE POLICY "weekly_journals_allow_app_access"
+ON weekly_journals
+FOR ALL
+TO anon, authenticated
+USING (true)
+WITH CHECK (true);
 
 -- ============================================================
 -- 另外要在 Supabase Storage 建一個放日誌照片的 Bucket（手動，一次性）：

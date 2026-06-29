@@ -11,7 +11,7 @@
 | 🤖 AI 週訓練菜單 | Gemini 依據小朋友體態與目標技巧，生成結構化每週訓練計畫 |
 | ✅ 每日打卡 | 一鍵記錄今日練習完成，累積積分 |
 | 📊 個人進度追蹤 | 進度條 + 積分統計，著重自我成長 |
-| 🎥 影片 AI 分析 | 上傳 10 秒練習短片，Gemini 多模態分析動作並給予兒童友善回饋 |
+| 🎥 影片助理教練 | 獨立上傳 10 秒練習短片，Gemini 多模態分析動作；不綁定訓練菜單或打卡 |
 
 ---
 
@@ -107,3 +107,11 @@ streamlit run app.py
 ## MVP 測試對象
 
 初期針對 **5 位小朋友** 進行測試，蒐集回饋後再決定是否擴展功能。
+
+---
+
+## Database Migration
+
+資料庫 schema / migration 狀態整理在 [DATABASE_MIGRATIONS.md](DATABASE_MIGRATIONS.md)。
+
+目前專案內最新 migration 檔案為 `migrate_v6.sql`；正式環境實際已套用到哪一版仍待確認。

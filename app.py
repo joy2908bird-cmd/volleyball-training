@@ -45,8 +45,8 @@ JOURNAL_MOODS = ["😄 超開心", "💪 有成就感", "😊 還不錯", "😐 
 EQUIPMENT_OPTIONS = ["排球", "沙球", "藥球", "彈力繩", "跳繩", "啞鈴", "角錐/標誌盤", "牆壁（對牆練習）"]
 
 # ── 訓練模式（生成菜單時選擇） ────────────────────────────────
-TRAINING_MODE_BALL = "綜合訓練（含排球）"      # 排球技巧為主，含影片分析
-TRAINING_MODE_FITNESS = "身體素質強化（不帶球）"  # 純體能基礎，不含影片分析
+TRAINING_MODE_BALL = "綜合訓練（含排球）"      # 排球技巧為主
+TRAINING_MODE_FITNESS = "身體素質強化（不帶球）"  # 純體能基礎，不含持球/排球技術
 TRAINING_MODES = [TRAINING_MODE_BALL, TRAINING_MODE_FITNESS]
 TARGET_SKILLS = ["低手墊球（接球）", "高手傳球", "扣球步法", "發球練習", "防守移位", "綜合訓練"]
 
@@ -186,14 +186,14 @@ def render_login():
    （名字要請教練先幫你建立，找不到名字代表還沒建好喔）
 2. **第一次登入**：填年級、年齡、性別、身高體重、還有家裡有哪些器材
 3. **生成菜單**：選訓練模式
-   - 🏐 **綜合訓練（含排球）**：可勾選想加強的技巧，會有影片 AI 分析
-   - 💪 **身體素質強化（不帶球）**：純體能，不含影片分析
+   - 🏐 **綜合訓練（含排球）**：可勾選想加強的技巧，AI 會安排排球訓練菜單
+   - 💪 **身體素質強化（不帶球）**：純體能，不安排持球或排球技術
 4. **跟著練**：在「📋 訓練菜單」每天有條列清單，按「▶ 開始訓練」用互動播放器——
-   計時項目會自動倒數、計次項目做完一組點一下，有「嗶」聲和震動提醒 🔔
+   計時項目會一組一組自動倒數、計次項目做完一組點一下，有「嗶」聲和震動提醒 🔔
 5. **打卡**：整天做完 → 按「✅ 完成第 N 天」。每個人照自己進度走，禮拜幾開始都沒關係，
    跳過的日子可以週末再補做 😊
-6. **影片 AI 分析**（綜合訓練才有）：在「🎥 影片 AI 分析」上傳你的動作影片，
-   AI 教練會給回饋和分數
+6. **影片助理教練**：在「🎥 影片助理教練」上傳動作影片，AI 教練會給回饋和分數。
+   這是獨立功能，不會影響訓練打卡。
 7. **寫日誌**：每完成一週，要到「📔 訓練日誌」寫一篇（選心情 + 寫幾句話，照片可加可不加）。
    **寫完才能解鎖下一週的訓練** ✍️
 8. **看成長**：在「📊 我的進度」看完成天數和身高體重成長曲線 📈
@@ -319,9 +319,20 @@ def save_curriculum(
     supabase.table("students").update({
         "curriculum": curriculum,
         "training_mode": training_mode,
-        "target_skill": target_skill,  # 體能模式為 None；含球模式存所選技巧（影片分析會用到）
+        "target_skill": target_skill,  # 體能模式為 None；含球模式存所選技巧
         "total_weeks": total_weeks,
         "plan_started_at": datetime.now().astimezone().isoformat(),
+    }).eq("id", student_id).execute()
+
+
+def clear_curriculum(student_id: int) -> None:
+    """清除目前菜單與菜單設定；不刪除打卡、日誌、影片分析等歷史紀錄。"""
+    supabase.table("students").update({
+        "curriculum": None,
+        "training_mode": None,
+        "target_skill": None,
+        "plan_started_at": None,
+        "total_weeks": 1,
     }).eq("id", student_id).execute()
 
 
@@ -460,21 +471,6 @@ def create_session_log(student_id: int, week_number: int, day_number: int) -> di
     return result.data[0]
 
 
-def update_training_log(
-    log_id: int, video_url: str | None,
-    ai_feedback: str, score: int,
-) -> dict:
-    """更新訓練紀錄（補上影片網址、AI 回饋、分數）"""
-    data = {
-        "video_url": video_url,
-        "ai_feedback": ai_feedback,
-        "score": score,
-        "is_completed": True,
-    }
-    result = supabase.table("training_logs").update(data).eq("id", log_id).execute()
-    return result.data[0]
-
-
 def upload_video_to_supabase(student_id: int, video_bytes: bytes, filename: str) -> str:
     """上傳影片至 Supabase Storage，回傳公開網址"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -483,6 +479,40 @@ def upload_video_to_supabase(student_id: int, video_bytes: bytes, filename: str)
         path, video_bytes, file_options={"content-type": "video/mp4"}
     )
     return supabase.storage.from_(BUCKET_NAME).get_public_url(path)
+
+
+def save_video_analysis(
+    student_id: int,
+    target_skill: str,
+    video_url: str | None,
+    feedback: dict,
+) -> dict | None:
+    """儲存獨立影片助理教練分析紀錄（不綁訓練日打卡）。"""
+    data = {
+        "student_id": student_id,
+        "target_skill": target_skill,
+        "video_url": video_url,
+        "ai_feedback": json.dumps(feedback, ensure_ascii=False),
+        "score": feedback.get("score"),
+    }
+    result = supabase.table("video_analyses").insert(data).execute()
+    return result.data[0] if result.data else None
+
+
+def get_video_analyses(student_id: int) -> list[dict]:
+    """取得獨立影片助理教練分析紀錄；未建表時友善回空清單。"""
+    try:
+        result = (
+            supabase.table("video_analyses")
+            .select("*")
+            .eq("student_id", student_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return result.data or []
+    except Exception as e:
+        print(f"[WARN] 讀取影片分析紀錄失敗（可能尚未執行 migrate_v6.sql）: {e}")
+        return []
 
 
 def upload_journal_photo(student_id: int, image_bytes: bytes, filename: str) -> str:
@@ -628,16 +658,16 @@ _STRUCTURE_RULES = """【課表結構要求】
 - 每個「訓練日」請拆成 3–6 個具體「訓練項目」放進 items 陣列，讓小朋友一眼看清楚今天要做哪幾項
 - 每個項目一定要標明做法，二選一：
   - 計次型 mode="reps"：填 reps（每組次數）與 sets（組數），例如 15 下 × 3 組（適合墊球、傳球、深蹲、開合跳次數等可數動作）
-  - 計時型 mode="time"：填 seconds（秒數），例如熱身、棒式、定時對牆練習、收操伸展（適合用時間衡量的動作）
+  - 計時型 mode="time"：填 seconds（每組秒數）與 sets（組數，未指定則 1 組），例如棒式 30 秒 × 3 組、熱身 90 秒 × 1 組
 - 每個訓練日的 items 必須依序包含三段：①第 1 項熱身（計時 60–120 秒）②中間 1–4 項主練習（圍繞當日主題，計次或計時）③最後 1 項收操伸展（計時 60–120 秒）
-- 每個項目要有：name（簡短任務名）、mode、對應的 reps+sets 或 seconds、equipment（用到的器材陣列，沒有就空陣列）、note（一句國小生看得懂的動作提醒）
+- 每個項目要有：name（簡短任務名）、mode、對應的 reps+sets 或 seconds+sets、equipment（用到的器材陣列，沒有就空陣列）、note（一句國小生看得懂的動作提醒）
 - 每個訓練日填 focus（今天主題一句話）與 duration_min（預估總分鐘，約等於所有項目時間總和）
 - 數量與強度依年級與體型調整，難度逐週提升，每週主題明確
 - 每週安排 5 個訓練日（週一至週五），第 6、7 天為休息日（is_rest=true，items 給空陣列，改用 task 寫一句休息建議）
 - 每天附一句 tip「小叮嚀」：訓練日輪流給「訓練安全、休息恢復、飲食營養」三類叮嚀（例：練完 30 分鐘內喝牛奶或吃點蛋白質、睡滿 9 小時、訓練前 1 小時不要吃太飽、多喝水少含糖飲料）；休息日的 tip 以恢復與飲食為主。語氣親切、講給小朋友和家長聽
 - 每週額外附一句 parent_note「家長小提醒」：用親切口吻提醒家長這週可以怎麼陪伴、觀察孩子的哪個重點、或如何鼓勵"""
 
-_CURRICULUM_JSON_SCHEMA = """⚠️ 請「只」回傳以下 JSON，不要加入任何說明文字（items 內的 reps/sets 與 seconds 二擇一填寫，依 mode 而定）：
+_CURRICULUM_JSON_SCHEMA = """⚠️ 請「只」回傳以下 JSON，不要加入任何說明文字（計次 items 填 reps+sets；計時 items 填 seconds+sets）：
 {
   "weeks": [
     {
@@ -649,9 +679,9 @@ _CURRICULUM_JSON_SCHEMA = """⚠️ 請「只」回傳以下 JSON，不要加入
           "day": 1, "day_name": "週一", "is_rest": false, "duration_min": 20,
           "focus": "今天主題（一句話）",
           "items": [
-            {"name": "開合跳熱身", "mode": "time", "seconds": 60, "equipment": [], "note": "輕鬆跳，把身體活動開"},
+            {"name": "開合跳熱身", "mode": "time", "seconds": 60, "sets": 1, "equipment": [], "note": "輕鬆跳，把身體活動開"},
             {"name": "對牆低手墊球", "mode": "reps", "reps": 15, "sets": 3, "equipment": ["排球", "牆壁（對牆練習）"], "note": "手臂打直夾緊，用前臂接球"},
-            {"name": "收操伸展", "mode": "time", "seconds": 90, "equipment": [], "note": "拉拉手臂和腿，慢慢深呼吸"}
+            {"name": "棒式挑戰", "mode": "time", "seconds": 30, "sets": 3, "equipment": [], "note": "肚子收緊，身體像一條直線"}
           ],
           "tip": "訓練/休息/飲食小叮嚀"
         },
@@ -951,7 +981,6 @@ def calculate_stats(student: dict, logs: list[dict]) -> dict:
     """計算訓練統計數字"""
     total_training_days = (student.get("total_weeks") or 1) * DAYS_PER_WEEK  # 每週 5 個訓練日
     completed_n = completed_sessions(logs)  # 以 (週,天) 去重的完成天數
-    videos = [l for l in logs if l.get("video_url")]
     total_score = sum(l.get("score") or 0 for l in logs)
     progress_pct = min(completed_n / total_training_days * 100, 100) if total_training_days else 0
 
@@ -960,7 +989,6 @@ def calculate_stats(student: dict, logs: list[dict]) -> dict:
         "total_training_days": total_training_days,
         "progress_pct": progress_pct,
         "total_score": total_score,
-        "video_count": len(videos),
     }
 
 
@@ -1157,8 +1185,8 @@ def render_generate_menu(student: dict):
         "選擇訓練模式",
         TRAINING_MODES,
         captions=[
-            "排球技巧為主，可上傳影片給 AI 分析動作",
-            "純體能基礎（敏捷、肌力、協調），不帶球、不含影片分析",
+            "排球技巧為主，AI 會安排含球訓練",
+            "純體能基礎（敏捷、肌力、協調），不帶球、不安排排球技術",
         ],
     )
 
@@ -1167,7 +1195,7 @@ def render_generate_menu(student: dict):
         picked_skills = st.multiselect(
             "🎯 想加強的排球技巧（可複選）", TARGET_SKILLS,
             default=[TARGET_SKILLS[0]],
-            help="可以選多項，AI 會把這些技巧都排進菜單；之後上傳影片時再選這支是練哪一項",
+            help="可以選多項，AI 會把這些技巧都排進菜單。影片分析請到獨立的「影片助理教練」。",
         )
         target_skill = "、".join(picked_skills)  # 以「、」串成一個字串存進 target_skill 欄位
 
@@ -1180,7 +1208,7 @@ def render_generate_menu(student: dict):
     )
 
     total_weeks = st.slider(
-        "📅 訓練週期（週）", min_value=2, max_value=12, value=4,
+        "📅 訓練週期（週）", min_value=1, max_value=12, value=4,
         help="一套菜單跑完後，可以再設定下一套",
     )
 
@@ -1231,7 +1259,9 @@ def _format_seconds(s) -> str:
 def item_badge(it: dict) -> str:
     """單一項目的份量標籤（計時 / 計次）"""
     if it.get("mode") == "time":
-        return f"⏱️ {_format_seconds(it.get('seconds'))}"
+        sets = it.get("sets") or 1
+        base = f"⏱️ {_format_seconds(it.get('seconds'))}"
+        return f"{base} × {sets} 組" if sets > 1 else base
     reps = it.get("reps") or 0
     sets = it.get("sets") or 1
     return f"🔁 {reps} 下 × {sets} 組" if sets > 1 else f"🔁 {reps} 下"
@@ -1324,13 +1354,16 @@ _SESSION_HTML = r"""
     const timer=$('timer'), reps=$('reps'), ctr=$('controls');
 
     if(it.mode === 'time'){
-      reps.style.display='none'; timer.style.display='block';
+      reps.style.display='block'; timer.style.display='block';
       remaining = it.seconds|0; timer.textContent = fmt(remaining);
+      drawTime(it);
       ctr.innerHTML = '<button id="pp">⏸ 暫停</button>'
-        + '<button id="rs" class="sec">↺ 重來</button>'
+        + '<button id="rs" class="sec">↺ 本組重來</button>'
+        + '<button id="ns" class="sec" disabled>下一組 →</button>'
         + '<button id="nx" class="sec">下一項 →</button>';
       $('pp').onclick = togglePause;
       $('rs').onclick = function(){ remaining = it.seconds|0; timer.textContent = fmt(remaining); startTimer(); };
+      $('ns').onclick = function(){ remaining = it.seconds|0; timer.textContent = fmt(remaining); startTimer(); this.disabled = true; };
       $('nx').onclick = next;
       startTimer();
     } else {
@@ -1356,15 +1389,42 @@ _SESSION_HTML = r"""
   }
   function markDoneReps(){ $('reps').innerHTML += '<br>✅ 這一項完成！'; }
 
+  function drawTime(it){
+    const sets = it.sets||1, sec = it.seconds||0;
+    let dots=''; for(let i=0;i<sets;i++) dots += (i<setsDone ? '🟢' : '⚪');
+    $('reps').innerHTML = '目標：每組 <b>'+fmt(sec)+'</b>，共 <b>'+sets+'</b> 組<br>'
+      + '<span style="font-size:1.8rem">'+dots+'</span><br>'
+      + '已完成 '+setsDone+' / '+sets+' 組';
+  }
+  function markDoneTime(){
+    $('reps').innerHTML += '<br>✅ 這一項完成！';
+  }
+
   function startTimer(){
     clearInterval(timerId); paused=false;
     const pp=$('pp'); if(pp) pp.textContent='⏸ 暫停';
+    if(pp) pp.disabled=false;
+    const ns=$('ns'); if(ns) ns.disabled=true;
     timerId = setInterval(function(){
       if(paused) return;
       remaining--; $('timer').textContent = fmt(remaining);
       if(remaining <= 0){
         clearInterval(timerId); $('timer').textContent = '⏰ 時間到！';
-        const nx=$('nx'); if(nx) nx.className='';
+        const it = ITEMS[idx];
+        if(it && it.mode === 'time'){
+          const sets = it.sets||1;
+          if(setsDone < sets) setsDone++;
+          drawTime(it);
+          if(setsDone >= sets){
+            const nx=$('nx'); if(nx) nx.className='';
+            const ns=$('ns'); if(ns) ns.disabled=true;
+            markDoneTime();
+          } else {
+            const ns=$('ns'); if(ns) ns.disabled=false;
+          }
+        } else {
+          const nx=$('nx'); if(nx) nx.className='';
+        }
         const pp=$('pp'); if(pp) pp.disabled=true;
         alertDone();
       }
@@ -1394,64 +1454,170 @@ def _to_int(v, default=0) -> int:
         return default
 
 
+def _editor_key(week_num: int, day_id: int, idx: int | str, field: str) -> str:
+    return f"panel_editor_w{week_num}_d{day_id}_{idx}_{field}"
+
+
+def _ensure_editor_value(key: str, value):
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
+def _bump_editor_number(key: str, delta: int, min_value: int, max_value: int) -> None:
+    current = _to_int(st.session_state.get(key), min_value)
+    st.session_state[key] = max(min_value, min(max_value, current + delta))
+
+
+def _clear_day_editor_state(week_num: int, day_id: int) -> None:
+    prefix = f"panel_editor_w{week_num}_d{day_id}_"
+    for key in list(st.session_state.keys()):
+        if str(key).startswith(prefix):
+            st.session_state.pop(key, None)
+
+
+def _save_day_items(student: dict, curriculum: dict, week_num: int, day: dict, new_items: list[dict]) -> None:
+    if not new_items:
+        st.warning("至少要保留一個項目喔！")
+        return
+    day["items"] = new_items
+    update_curriculum_json(student["id"], curriculum)
+    st.session_state.curriculum = curriculum
+    _clear_day_editor_state(week_num, day["day"])
+    st.success("✅ 已儲存這天的修改！")
+    st.rerun()
+
+
+def _read_panel_items(week_num: int, day_id: int, item_count: int) -> list[dict]:
+    new_items = []
+    for idx in range(item_count):
+        name = str(st.session_state.get(_editor_key(week_num, day_id, idx, "name"), "")).strip()
+        if not name:
+            continue
+        mode_label = st.session_state.get(_editor_key(week_num, day_id, idx, "mode"), "計次")
+        if mode_label == "計時":
+            item = {
+                "name": name,
+                "mode": "time",
+                "seconds": _to_int(st.session_state.get(_editor_key(week_num, day_id, idx, "seconds")), 30),
+                "sets": _to_int(st.session_state.get(_editor_key(week_num, day_id, idx, "sets")), 1),
+            }
+        else:
+            item = {
+                "name": name,
+                "mode": "reps",
+                "reps": _to_int(st.session_state.get(_editor_key(week_num, day_id, idx, "reps")), 10),
+                "sets": _to_int(st.session_state.get(_editor_key(week_num, day_id, idx, "sets")), 1),
+            }
+        item["equipment"] = st.session_state.get(_editor_key(week_num, day_id, idx, "equipment"), [])
+        item["note"] = str(st.session_state.get(_editor_key(week_num, day_id, idx, "note"), "")).strip()
+        new_items.append(item)
+    return new_items
+
+
 def render_day_editor(student: dict, curriculum: dict, week_num: int, day: dict) -> None:
-    """手動微調某一天的項目（改秒數/次數/組數、增刪項目）。教練與家長皆可用。"""
+    """用面板微調某一天的項目（改秒數/次數/組數、增刪項目）。教練與家長皆可用。"""
     if not st.toggle("✏️ 編輯這天的份量 / 項目", key=f"edit_w{week_num}_d{day['day']}"):
         return
 
     items = day.get("items") or []
-    rows = [{
-        "名稱": it.get("name", ""),
-        "類型": "計時" if it.get("mode") == "time" else "計次",
-        "秒數": int(it.get("seconds") or 0),
-        "次數": int(it.get("reps") or 0),
-        "組數": int(it.get("sets") or 1),
-        "器材": "、".join(it.get("equipment") or []),
-        "提醒": it.get("note", ""),
-    } for it in items]
-    df = pd.DataFrame(rows, columns=["名稱", "類型", "秒數", "次數", "組數", "器材", "提醒"])
-
-    edited = st.data_editor(
-        df, num_rows="dynamic", use_container_width=True, hide_index=True,
-        key=f"editor_w{week_num}_d{day['day']}",
-        column_config={
-            "名稱": st.column_config.TextColumn("名稱", required=True, width="medium"),
-            "類型": st.column_config.SelectboxColumn("類型", options=["計時", "計次"], required=True, width="small"),
-            "秒數": st.column_config.NumberColumn("秒數(計時用)", min_value=0, max_value=1800, step=5),
-            "次數": st.column_config.NumberColumn("次數(計次用)", min_value=0, max_value=300, step=1),
-            "組數": st.column_config.NumberColumn("組數(計次用)", min_value=1, max_value=30, step=1),
-            "器材": st.column_config.TextColumn("器材(用、分隔)"),
-            "提醒": st.column_config.TextColumn("小提醒", width="large"),
-        },
-    )
     st.caption(
-        "💡 「計時」項目填**秒數**；「計次」項目填**次數**與**組數**。"
-        "可在表格最底列直接新增、或勾選列首刪除。想分部位伸展，就拆成多列各自計時即可。"
+        "用下方小面板調整就好：計時看秒數和組數，計次看次數和組數。"
+        "調整完記得按最下面的「儲存這天」。"
     )
 
-    if st.button("💾 儲存這天的修改", key=f"save_w{week_num}_d{day['day']}", type="primary"):
-        new_items = []
-        for _, r in edited.iterrows():
-            name = str(r["名稱"] or "").strip()
-            if not name:
-                continue  # 跳過沒填名稱的空列
-            if r["類型"] == "計時":
-                item = {"name": name, "mode": "time", "seconds": _to_int(r["秒數"], 30)}
-            else:
-                item = {"name": name, "mode": "reps",
-                        "reps": _to_int(r["次數"], 10), "sets": _to_int(r["組數"], 1)}
-            item["equipment"] = [e.strip() for e in str(r["器材"] or "").split("、") if e.strip()]
-            item["note"] = str(r["提醒"] or "").strip()
-            new_items.append(item)
+    for idx, it in enumerate(items):
+        day_id = day["day"]
+        name_key = _editor_key(week_num, day_id, idx, "name")
+        mode_key = _editor_key(week_num, day_id, idx, "mode")
+        seconds_key = _editor_key(week_num, day_id, idx, "seconds")
+        reps_key = _editor_key(week_num, day_id, idx, "reps")
+        sets_key = _editor_key(week_num, day_id, idx, "sets")
+        equipment_key = _editor_key(week_num, day_id, idx, "equipment")
+        note_key = _editor_key(week_num, day_id, idx, "note")
 
-        if not new_items:
-            st.warning("至少要保留一個項目喔！")
+        _ensure_editor_value(name_key, it.get("name", ""))
+        _ensure_editor_value(mode_key, "計時" if it.get("mode") == "time" else "計次")
+        _ensure_editor_value(seconds_key, int(it.get("seconds") or 60))
+        _ensure_editor_value(reps_key, int(it.get("reps") or 10))
+        _ensure_editor_value(sets_key, int(it.get("sets") or 1))
+        _ensure_editor_value(equipment_key, it.get("equipment") or [])
+        _ensure_editor_value(note_key, it.get("note", ""))
+
+        with st.container(border=True):
+            top_a, top_b = st.columns([3, 1])
+            top_a.text_input("動作名稱", key=name_key, placeholder="例：對牆低手墊球")
+            if top_b.button("🗑️ 刪除", key=_editor_key(week_num, day_id, idx, "delete"), use_container_width=True):
+                new_items = _read_panel_items(week_num, day_id, len(items))
+                if idx < len(new_items):
+                    new_items.pop(idx)
+                _save_day_items(student, curriculum, week_num, day, new_items)
+                return
+
+            st.radio("類型", ["計次", "計時"], key=mode_key, horizontal=True)
+
+            if st.session_state[mode_key] == "計時":
+                minus, value, plus = st.columns([1, 2, 1])
+                if minus.button("-10 秒", key=_editor_key(week_num, day_id, idx, "seconds_minus"), use_container_width=True):
+                    _bump_editor_number(seconds_key, -10, 10, 1800)
+                if plus.button("+10 秒", key=_editor_key(week_num, day_id, idx, "seconds_plus"), use_container_width=True):
+                    _bump_editor_number(seconds_key, 10, 10, 1800)
+                value.number_input("每組幾秒", min_value=10, max_value=1800, step=10, key=seconds_key)
+
+                s_minus, s_value, s_plus = st.columns([1, 2, 1])
+                if s_minus.button("-1 組", key=_editor_key(week_num, day_id, idx, "time_sets_minus"), use_container_width=True):
+                    _bump_editor_number(sets_key, -1, 1, 30)
+                if s_plus.button("+1 組", key=_editor_key(week_num, day_id, idx, "time_sets_plus"), use_container_width=True):
+                    _bump_editor_number(sets_key, 1, 1, 30)
+                s_value.number_input("做幾組", min_value=1, max_value=30, step=1, key=sets_key)
+            else:
+                r_minus, r_value, r_plus = st.columns([1, 2, 1])
+                if r_minus.button("-1 下", key=_editor_key(week_num, day_id, idx, "reps_minus"), use_container_width=True):
+                    _bump_editor_number(reps_key, -1, 1, 300)
+                if r_plus.button("+1 下", key=_editor_key(week_num, day_id, idx, "reps_plus"), use_container_width=True):
+                    _bump_editor_number(reps_key, 1, 1, 300)
+                r_value.number_input("每組幾下", min_value=1, max_value=300, step=1, key=reps_key)
+
+                s_minus, s_value, s_plus = st.columns([1, 2, 1])
+                if s_minus.button("-1 組", key=_editor_key(week_num, day_id, idx, "sets_minus"), use_container_width=True):
+                    _bump_editor_number(sets_key, -1, 1, 30)
+                if s_plus.button("+1 組", key=_editor_key(week_num, day_id, idx, "sets_plus"), use_container_width=True):
+                    _bump_editor_number(sets_key, 1, 1, 30)
+                s_value.number_input("做幾組", min_value=1, max_value=30, step=1, key=sets_key)
+
+            equipment_options = list(dict.fromkeys(EQUIPMENT_OPTIONS + (it.get("equipment") or [])))
+            st.multiselect("器材", equipment_options, key=equipment_key)
+            st.text_area("小提醒", key=note_key, height=80, placeholder="例：手臂打直夾緊，眼睛看球")
+
+    with st.expander("➕ 新增一個動作", expanded=False):
+        add_name = st.text_input("新動作名稱", key=f"add_name_w{week_num}_d{day['day']}", placeholder="例：收操伸展")
+        add_mode = st.radio("新動作類型", ["計次", "計時"], key=f"add_mode_w{week_num}_d{day['day']}", horizontal=True)
+        if add_mode == "計時":
+            add_seconds = st.number_input("每組幾秒", min_value=10, max_value=1800, value=30, step=10, key=f"add_seconds_w{week_num}_d{day['day']}")
+            add_sets = st.number_input("做幾組", min_value=1, max_value=30, value=3, step=1, key=f"add_time_sets_w{week_num}_d{day['day']}")
+            add_reps = 10
+        else:
+            add_reps = st.number_input("每組幾下", min_value=1, max_value=300, value=10, step=1, key=f"add_reps_w{week_num}_d{day['day']}")
+            add_sets = st.number_input("做幾組", min_value=1, max_value=30, value=2, step=1, key=f"add_sets_w{week_num}_d{day['day']}")
+            add_seconds = 60
+        add_equipment = st.multiselect("器材", EQUIPMENT_OPTIONS, key=f"add_equipment_w{week_num}_d{day['day']}")
+        add_note = st.text_area("小提醒", key=f"add_note_w{week_num}_d{day['day']}", height=80)
+        if st.button("加入這個動作", key=f"add_item_w{week_num}_d{day['day']}", use_container_width=True):
+            if not add_name.strip():
+                st.warning("請先輸入動作名稱。")
+                return
+            new_items = _read_panel_items(week_num, day["day"], len(items))
+            if add_mode == "計時":
+                new_item = {"name": add_name.strip(), "mode": "time", "seconds": int(add_seconds), "sets": int(add_sets)}
+            else:
+                new_item = {"name": add_name.strip(), "mode": "reps", "reps": int(add_reps), "sets": int(add_sets)}
+            new_item["equipment"] = add_equipment
+            new_item["note"] = add_note.strip()
+            new_items.append(new_item)
+            _save_day_items(student, curriculum, week_num, day, new_items)
             return
-        day["items"] = new_items  # day 是 curriculum 內的參照，直接改即同步
-        update_curriculum_json(student["id"], curriculum)
-        st.session_state.curriculum = curriculum
-        st.success("✅ 已儲存這天的修改！")
-        st.rerun()
+
+    if st.button("💾 儲存這天的修改", key=f"save_w{week_num}_d{day['day']}", type="primary", use_container_width=True):
+        _save_day_items(student, curriculum, week_num, day, _read_panel_items(week_num, day["day"], len(items)))
 
 
 def render_day_checkin(student: dict, week_number: int, day_num: int, logs: list[dict]) -> None:
@@ -1528,7 +1694,7 @@ def render_curriculum(curriculum: dict, current_week: int, student: dict | None 
                         if meta:
                             st.caption("　".join(meta))
                     st.markdown("---")
-                    st.markdown("**🎮 跟著做：按「開始」會帶你一項一項完成，計時項目自動倒數，計次項目做完一組點一下**")
+                    st.markdown("**🎮 跟著做：按「開始」會帶你一項一項完成，計時項目會一組一組倒數，計次項目做完一組點一下**")
                     render_training_session(items)
                     # 每一天各自獨立打卡（第 N 天做完打第 N 天）
                     if student is not None:
@@ -1627,11 +1793,7 @@ def render_checkin(student: dict, logs: list[dict]):
         dy = l.get("day_number")
         title = f"第 {wk} 週・第 {dy} 天" if dy else f"第 {wk} 週"
         st.markdown(f"#### ✅ {title}　⭐ {l.get('score', 10)} 分")
-        feedback = parse_ai_feedback(l.get("ai_feedback"))
-        if feedback:
-            render_ai_feedback_card(feedback)
-        else:
-            st.caption("（上傳練習影片可獲得 AI 詳細評分與回饋！）")
+        st.caption("訓練完成紀錄。想請 AI 看動作時，請到「🎥 影片助理教練」。")
         st.markdown("---")
 
 
@@ -1751,6 +1913,7 @@ def render_body_metric_reminder(student: dict):
 def render_progress(student: dict, logs: list[dict]):
     """學員進度看板"""
     stats = calculate_stats(student, logs)
+    analyses = get_video_analyses(student["id"])
 
     # 進度條
     st.markdown("#### 🎯 整體訓練完成度")
@@ -1764,7 +1927,7 @@ def render_progress(student: dict, logs: list[dict]):
     c1, c2, c3 = st.columns(3)
     c1.metric("📅 打卡天數", stats["completed_days"])
     c2.metric("⭐ 累積積分", stats["total_score"])
-    c3.metric("🎥 上傳影片", stats["video_count"])
+    c3.metric("🎥 AI 分析", len(analyses))
 
     # 成長曲線（身高 / 體重，需 ≥2 筆紀錄）
     metrics = get_body_metrics(student["id"])
@@ -1788,26 +1951,54 @@ def render_progress(student: dict, logs: list[dict]):
         st.markdown("#### 📝 近期訓練紀錄")
         recent = sorted(logs, key=lambda x: x["training_date"], reverse=True)[:5]
         for log in recent:
-            icon = "🎥" if log.get("video_url") else "✅"
             score_text = f"⭐ {log['score']} 分" if log.get("score") else ""
             day_text = f"第 {log['day_number']} 天" if log.get("day_number") else ""
             st.markdown(
-                f"{icon} **{log['training_date']}**　第 {log['week_number']} 週 {day_text}　{score_text}"
+                f"✅ **{log['training_date']}**　第 {log['week_number']} 週 {day_text}　{score_text}"
             )
     else:
         st.info("還沒有訓練紀錄，快去打卡吧！💪")
 
+    if analyses:
+        st.markdown("#### 🎥 近期影片助理教練紀錄")
+        for a in analyses[:5]:
+            created = (a.get("created_at") or "")[:10]
+            skill = a.get("target_skill") or "綜合訓練"
+            score = a.get("score")
+            st.markdown(f"🎥 **{created}**　{skill}　⭐ {score if score is not None else '-'} 分")
 
-def render_video_upload(student: dict, current_week: int):
-    """影片上傳與 AI 分析區"""
+
+def render_video_coach(student: dict):
+    """獨立影片助理教練：不綁訓練菜單、不影響打卡進度。"""
+    st.markdown("## 🎥 影片助理教練")
     st.markdown(
-        "上傳一段 **10 秒以內**的練習短片，AI 教練會分析你的動作並給予專屬回饋！🤖🏐"
+        "上傳一段 **10 秒以內**的練習短片，AI 教練會專門分析動作並給予回饋。"
     )
-    st.caption("建議從正面或側面拍攝，讓 AI 能清楚看到動作。")
+    st.caption("這是獨立功能，不會自動完成任何訓練日，也不會把影片掛到訓練菜單。")
+
+    analyses = get_video_analyses(student["id"])
+    if analyses:
+        with st.expander("📚 查看最近的影片分析紀錄", expanded=False):
+            for a in analyses[:5]:
+                feedback = parse_ai_feedback(a.get("ai_feedback"))
+                title = (
+                    f"{(a.get('created_at') or '')[:10]}｜"
+                    f"{a.get('target_skill') or '綜合訓練'}｜"
+                    f"⭐ {a.get('score') if a.get('score') is not None else '-'} 分"
+                )
+                with st.container(border=True):
+                    st.markdown(f"**{title}**")
+                    if feedback:
+                        greeting = feedback.get("greeting")
+                        if greeting:
+                            st.caption(greeting)
+                    if a.get("video_url"):
+                        st.link_button("開啟影片備份", a["video_url"])
 
     uploaded = st.file_uploader(
         "選擇影片（mp4 / mov，建議 10 秒以內，最大 50 MB）",
         type=["mp4", "mov", "avi"],
+        key=f"video_coach_upload_{student['id']}",
     )
 
     if not uploaded:
@@ -1815,18 +2006,15 @@ def render_video_upload(student: dict, current_week: int):
 
     st.video(uploaded)
 
-    # 這支影片是練哪一項技巧（學員可能複選了多項，分析需鎖定單一技巧的檢核點）
-    skills = parse_skills(student.get("target_skill"))
-    if len(skills) > 1:
-        skill = st.selectbox("🎯 這支影片是在練哪一項技巧？", skills)
-    else:
-        skill = skills[0] if skills else "綜合訓練"
-
-    # 這支影片要記在「第幾天」（把 AI 分數/回饋掛到那一天的紀錄，並標記完成）
-    day_num = st.selectbox(
-        f"📅 這是第 {current_week} 週的第幾天？",
-        list(range(1, DAYS_PER_WEEK + 1)),
-        format_func=lambda d: f"第 {d} 天",
+    suggested_skills = parse_skills(student.get("target_skill"))
+    skill_options = TARGET_SKILLS
+    default_skill = suggested_skills[0] if suggested_skills else "綜合訓練"
+    default_idx = skill_options.index(default_skill) if default_skill in skill_options else len(skill_options) - 1
+    skill = st.selectbox(
+        "🎯 這支影片想分析哪一項動作？",
+        skill_options,
+        index=default_idx,
+        help="影片助理教練是獨立功能，可以分析目前菜單以外的技巧。",
     )
 
     if not st.button("🤖 送出給 AI 教練分析！", type="primary", use_container_width=True):
@@ -1863,20 +2051,12 @@ def render_video_upload(student: dict, current_week: int):
             st.error("❌ AI 分析失敗，請稍後再試（影片建議 10 秒內、50MB 以下）。")
             return
 
-    # Step 3:儲存到 training_logs（掛到「第 current_week 週第 day_num 天」那筆，沒有就建立）
-    session_log = get_session_log(student["id"], current_week, day_num)
-    feedback_json = json.dumps(feedback, ensure_ascii=False)
-    score = feedback.get("score", 80)
-
+    # Step 3:儲存到獨立 video_analyses，不影響訓練打卡與訓練分數
     try:
-        if session_log:
-            update_training_log(session_log["id"], public_url, feedback_json, score)
-        else:
-            new_log = create_session_log(student["id"], current_week, day_num)
-            update_training_log(new_log["id"], public_url, feedback_json, score)
+        save_video_analysis(student["id"], skill, public_url, feedback)
     except Exception as e:
-        print(f"[ERROR] Saving training log failed: {e}")  # 細節只留在伺服器 log
-        st.warning("⚠️ 紀錄儲存失敗，但回饋仍顯示如下。")
+        print(f"[ERROR] Saving video analysis failed: {e}")  # 細節只留在伺服器 log
+        st.warning("⚠️ 分析完成但未儲存紀錄；請確認已在 Supabase 執行 `migrate_v6.sql`。")
 
     # Step 4:顯示回饋
     st.markdown("---")
@@ -2069,7 +2249,7 @@ def main():
             # 🏐 歡迎使用排球訓練小幫手！（教練後台）
 
             這是一個專為小朋友設計的 AI 排球訓練夥伴。教練在這裡**建立名冊**，
-            小朋友與家長登入後**自己填資料、生成菜單、上傳影片**。
+            小朋友與家長登入後**自己填資料、生成菜單**，也可以用獨立的影片助理教練看動作。
 
             👇 先用下方表單建立第一位小選手的名字吧！
             """)
@@ -2112,9 +2292,13 @@ def main():
             render_profile_form(student, is_edit=False)
         return
 
-    # 2) 資料已完善但還沒有菜單 → 選模式生成
+    # 2) 資料已完善但還沒有菜單 → 可先生成菜單，也可直接使用獨立影片助理教練
     if curriculum is None:
-        render_generate_menu(student)
+        tab_generate, tab_video = st.tabs(["🗓️ 生成訓練菜單", "🎥 影片助理教練"])
+        with tab_generate:
+            render_generate_menu(student)
+        with tab_video:
+            render_video_coach(student)
         return
 
     logs = get_training_logs(student["id"])
@@ -2156,15 +2340,38 @@ def main():
     # 兩週身高體重提醒（滿 14 天才出現）
     render_body_metric_reminder(student)
 
-    # 教練工具：重新生成菜單（編輯/刪除學員已移到左側欄）
+    # 教練工具：菜單管理（編輯/刪除學員已移到左側欄）
     if is_admin:
-        with st.expander("🛠️ 教練工具：重新生成菜單"):
+        with st.expander("🛠️ 教練工具：菜單管理"):
+            st.markdown("#### 清除目前菜單")
+            st.caption("只清除這位小朋友目前這份菜單與菜單設定，不會刪除打卡、日誌、影片分析或身高體重紀錄。")
+            if logs:
+                st.warning(
+                    f"這位小朋友目前已有 {completed_sessions(logs)} 天打卡紀錄。"
+                    "如果已經正式開始訓練，清菜單後重新生成仍會保留這些進度紀錄。"
+                )
+            confirm_clear = st.checkbox(
+                "我確認要清除目前菜單",
+                key=f"confirm_clear_curriculum_{student['id']}",
+            )
+            if st.button(
+                "🧹 清除目前菜單",
+                key=f"clear_curriculum_{student['id']}",
+                use_container_width=True,
+                disabled=not confirm_clear,
+            ):
+                clear_curriculum(student["id"])
+                st.session_state.current_student = get_student_by_name(student["name"])
+                st.session_state.curriculum = None
+                st.success("已清除目前菜單，可以重新生成。")
+                st.rerun()
+
+            st.markdown("---")
+            st.markdown("#### 重新生成菜單")
             render_generate_menu(student)
 
-    # 功能頁籤（影片分析僅在「綜合含球」模式提供）
-    tab_labels = ["📋 訓練菜單", "✅ 今日完成", "📊 我的進度", "📔 訓練日誌"]
-    if is_ball_mode:
-        tab_labels.append("🎥 影片 AI 分析")
+    # 功能頁籤：影片助理教練為獨立功能，不綁訓練菜單或打卡
+    tab_labels = ["📋 訓練菜單", "✅ 今日完成", "🎥 影片助理教練", "📊 我的進度", "📔 訓練日誌"]
     tabs = st.tabs(tab_labels)
 
     with tabs[0]:
@@ -2172,12 +2379,11 @@ def main():
     with tabs[1]:
         render_checkin(student, logs)
     with tabs[2]:
-        render_progress(student, logs)
+        render_video_coach(student)
     with tabs[3]:
+        render_progress(student, logs)
+    with tabs[4]:
         render_journal_tab(student, current_week, logs, plan_key, readonly=is_admin)
-    if is_ball_mode:
-        with tabs[4]:
-            render_video_upload(student, current_week)
 
 
 if __name__ == "__main__":
