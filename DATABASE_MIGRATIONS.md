@@ -4,7 +4,7 @@
 
 ## Current Status
 
-- 最新 migration 檔案版本：`migrate_v7.sql`
+- 最新 migration 檔案版本：`migrate_v8.sql`
 - 正式環境目前已套用到哪一版：待確認
 - 新環境目前需要手動依序執行多個 SQL 檔，容易漏跑
 - 之後建議收斂成 `schema_latest.sql` 或 `migrations/` 目錄
@@ -22,6 +22,7 @@
 | 5 | `migrate_v5.sql` | 新增比賽資料表 `competitions` |
 | 6 | `migrate_v6.sql` | 新增影片分析紀錄 `video_analyses` |
 | 7 | `migrate_v7.sql` | 新增額外積分 / 獎勵紀錄 `point_events` |
+| 8 | `migrate_v8.sql` | 新增角色養成最小版：`avatar_templates`、`avatar_profiles`、`pet_catalog`、`student_pets`，並 seed 8 位角色與 13 隻寵物 |
 
 另有舊檔 `migration.sql`，目前看起來是早期 Supabase 初始化說明或舊版 schema。之後整理時要確認它是否仍需要保留，或改成歸檔。
 
@@ -37,6 +38,7 @@ migrate_v4.sql
 migrate_v5.sql
 migrate_v6.sql
 migrate_v7.sql
+migrate_v8.sql
 ```
 
 同時需要手動確認 Supabase Storage bucket：
@@ -82,13 +84,14 @@ migrations/
   005_competitions.sql
   006_video_analyses.sql
   007_point_events.sql
+  008_avatar_and_pets.sql
 ```
 
 README 或這份文件中固定維護：
 
 ```text
 正式環境目前 schema 版本：vX
-最新 schema 版本：v6
+最新 schema 版本：v8
 ```
 
 ## Suggested Next Step
