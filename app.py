@@ -167,6 +167,23 @@ PET_CATALOG_SEED = [
     {"id": "pet_ssr_02", "display_name": "極光機狼", "rarity": "SSR", "species_note": "極光科技機械狼", "asset_path": "assets/sprites/pets/pet_ssr_02.png", "active": True, "asset_ready": True, "sort_order": 13},
 ]
 
+GACHA_MACHINE_ASSETS = {
+    "preview": "assets/sprites/gacha_machine/preview_composited.png",
+    "base": "assets/sprites/gacha_machine/gacha_machine_base.png",
+    "globe_idle": "assets/sprites/gacha_machine/capsule_globe_idle.png",
+    "knob_idle": "assets/sprites/gacha_machine/knob_idle.png",
+    "capsule_drop": "assets/sprites/gacha_machine/capsule_drop.png",
+    "sparkle_fx": "assets/sprites/gacha_machine/sparkle_fx.png",
+    "rarity_flash_ssr": "assets/sprites/gacha_machine/rarity_flash_ssr.png",
+}
+
+GACHA_RARITY_WEIGHTS = {
+    "N": 70,
+    "R": 22,
+    "SR": 7,
+    "SSR": 1,
+}
+
 # ── 功能 A：生成菜單時可勾選的「重點加強」身體素質項目（依類別排序，可複選） ──
 # ⚠️ 這些字串會被功能 D 的階段建議用來「預選」，兩邊務必一致
 EMPHASIS_OPTIONS = [
@@ -807,6 +824,49 @@ def get_student_pets(student_id: int) -> list[dict]:
     if not owned and "pet_n_01" in pet_lookup:
         owned.append({**pet_lookup["pet_n_01"], "quantity": 1, "source": "starter"})
     return sorted(owned, key=lambda r: r.get("sort_order") or 999)
+
+
+def grant_student_pet(student_id: int, pet_id: str, source: str = "gacha") -> bool:
+    """把抽到的寵物加入學生背包；重複抽到同一隻就增加數量。"""
+    try:
+        existing = (
+            supabase.table("student_pets")
+            .select("*")
+            .eq("student_id", student_id)
+            .eq("pet_id", pet_id)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            current = existing.data[0]
+            supabase.table("student_pets").update({
+                "quantity": (current.get("quantity") or 1) + 1,
+                "source": source,
+            }).eq("id", current["id"]).execute()
+        else:
+            supabase.table("student_pets").insert({
+                "student_id": student_id,
+                "pet_id": pet_id,
+                "quantity": 1,
+                "source": source,
+            }).execute()
+        return True
+    except Exception as e:
+        print(f"[WARN] 寵物寫入失敗（可能尚未執行 migrate_v8.sql）: {e}")
+        return False
+
+
+def draw_gacha_pet(pets: list[dict]) -> dict | None:
+    """依稀有度權重抽一隻寵物。"""
+    if not pets:
+        return None
+    rarity_pool = {}
+    for pet in pets:
+        rarity_pool.setdefault(pet.get("rarity") or "N", []).append(pet)
+    rarities = [r for r in GACHA_RARITY_WEIGHTS if rarity_pool.get(r)]
+    weights = [GACHA_RARITY_WEIGHTS[r] for r in rarities]
+    picked_rarity = random.choices(rarities, weights=weights, k=1)[0]
+    return random.choice(rarity_pool[picked_rarity])
 
 
 def upload_video_to_supabase(student_id: int, video_bytes: bytes, filename: str) -> str:
@@ -2446,6 +2506,57 @@ def render_avatar_card(student: dict) -> None:
                         st.caption(f"{pet.get('rarity', '')}｜持有 {pet.get('quantity', 1)}")
 
 
+def render_pet_gacha_machine(student: dict) -> None:
+    """第一版寵物扭蛋機：先接抽寵物與入庫，動畫素材先以靜態機台展示。"""
+    st.markdown("## 🥚 寵物扭蛋機")
+    st.caption("第一版先開放抽寵物與收集；之後再接完整轉鈕、搖晃、掉蛋動畫。")
+
+    pet_catalog = get_pet_catalog(active_only=True)
+    if not pet_catalog:
+        st.warning("目前沒有可抽的寵物資料，請確認 `pet_catalog` seed 已建立。")
+        return
+
+    machine_col, result_col = st.columns([1, 1])
+    with machine_col:
+        machine_file = _asset_file(GACHA_MACHINE_ASSETS["preview"])
+        if machine_file:
+            st.image(machine_file, width=320)
+        else:
+            st.info("扭蛋機素材尚未找到。")
+
+        st.caption("目前機率：N 70%｜R 22%｜SR 7%｜SSR 1%")
+        if st.button("🎰 轉一次", type="primary", use_container_width=True):
+            result = draw_gacha_pet(pet_catalog)
+            if not result:
+                st.error("沒有可抽取的寵物。")
+                return
+            if grant_student_pet(student["id"], result["id"], source="gacha"):
+                st.session_state[f"last_gacha_result_{student['id']}"] = result
+                st.success(f"抽到 {result.get('display_name', result['id'])}！")
+                st.balloons()
+                st.rerun()
+            else:
+                st.error("抽獎結果無法寫入，請確認 `migrate_v8.sql` 已執行。")
+
+    with result_col:
+        result = st.session_state.get(f"last_gacha_result_{student['id']}")
+        if result:
+            with st.container(border=True):
+                rarity = result.get("rarity", "N")
+                if rarity == "SSR":
+                    flash_file = _asset_file(GACHA_MACHINE_ASSETS["rarity_flash_ssr"])
+                    if flash_file:
+                        st.image(flash_file, width=180)
+                pet_file = _asset_file(result.get("asset_path"))
+                if pet_file:
+                    st.image(pet_file, width=180)
+                st.markdown(f"### {result.get('display_name', result['id'])}")
+                st.markdown(f"稀有度：**{rarity}**")
+                st.caption(result.get("species_note", ""))
+        else:
+            st.info("按下轉一次後，抽到的寵物會出現在這裡。")
+
+
 def render_body_metric_reminder(student: dict):
     """距上次紀錄滿 14 天 → 頂部溫和提示更新身高體重（非強制）"""
     days = days_since_last_metric(student["id"])
@@ -2860,11 +2971,13 @@ def main():
 
     # 2) 資料已完善但還沒有菜單 → 可先生成菜單，也可直接使用獨立影片助理教練
     if curriculum is None:
-        tab_generate, tab_avatar, tab_video = st.tabs(["🗓️ 生成訓練菜單", "🎮 角色卡", "🎥 影片助理教練"])
+        tab_generate, tab_avatar, tab_gacha, tab_video = st.tabs(["🗓️ 生成訓練菜單", "🎮 角色卡", "🥚 寵物扭蛋", "🎥 影片助理教練"])
         with tab_generate:
             render_generate_menu(student)
         with tab_avatar:
             render_avatar_card(student)
+        with tab_gacha:
+            render_pet_gacha_machine(student)
         with tab_video:
             render_video_coach(student)
         return
@@ -2944,7 +3057,7 @@ def main():
             render_point_manager(student, logs, point_events)
 
     # 功能頁籤：影片助理教練為獨立功能，不綁訓練菜單或打卡
-    tab_labels = ["📋 訓練菜單", "✅ 今日完成", "🎮 角色卡", "🎥 影片助理教練", "📊 我的進度", "📔 訓練日誌"]
+    tab_labels = ["📋 訓練菜單", "✅ 今日完成", "🎮 角色卡", "🥚 寵物扭蛋", "🎥 影片助理教練", "📊 我的進度", "📔 訓練日誌"]
     tabs = st.tabs(tab_labels)
 
     with tabs[0]:
@@ -2954,10 +3067,12 @@ def main():
     with tabs[2]:
         render_avatar_card(student)
     with tabs[3]:
-        render_video_coach(student)
+        render_pet_gacha_machine(student)
     with tabs[4]:
-        render_progress(student, logs, point_events)
+        render_video_coach(student)
     with tabs[5]:
+        render_progress(student, logs, point_events)
+    with tabs[6]:
         render_journal_tab(student, current_week, logs, plan_key, readonly=is_admin)
 
 
