@@ -714,14 +714,70 @@ def _image_data_uri(local_path: str) -> str | None:
         return None
 
 
-def _pet_card_colors(rarity: str) -> tuple[str, str]:
-    colors = {
-        "N": ("linear-gradient(135deg, #f8fafc 0%, #e0f2fe 100%)", "#bfdbfe"),
-        "R": ("linear-gradient(135deg, #ecfeff 0%, #ccfbf1 48%, #e0e7ff 100%)", "#5eead4"),
-        "SR": ("linear-gradient(135deg, #fff7ed 0%, #fde68a 45%, #fbcfe8 100%)", "#f59e0b"),
-        "SSR": ("linear-gradient(135deg, #fdf4ff 0%, #c4b5fd 42%, #fde68a 100%)", "#a855f7"),
+def _pet_card_style(rarity: str) -> dict:
+    styles = {
+        "N": {
+            "background": (
+                "radial-gradient(circle at 50% 34%, rgba(255,255,255,.95) 0 18%, transparent 36%),"
+                "linear-gradient(180deg, #bdebd1 0%, #e9fff4 48%, #9fd28a 49%, #6dbb71 100%)"
+            ),
+            "overlay": (
+                "linear-gradient(90deg, transparent 0 23%, rgba(255,255,255,.32) 24% 25%, transparent 26% 49%, "
+                "rgba(255,255,255,.28) 50% 51%, transparent 52% 75%, rgba(255,255,255,.24) 76% 77%, transparent 78%),"
+                "linear-gradient(0deg, transparent 0 78%, rgba(255,255,255,.45) 79% 80%, transparent 81%)"
+            ),
+            "border": "#79c267",
+            "shadow": "0 10px 22px rgba(50, 136, 81, .20)",
+            "badge": "#2f8f57",
+        },
+        "R": {
+            "background": (
+                "radial-gradient(circle at 18% 18%, rgba(255,255,255,.9) 0 6%, transparent 17%),"
+                "radial-gradient(circle at 80% 24%, rgba(129,230,217,.8) 0 8%, transparent 18%),"
+                "linear-gradient(180deg, #dbeafe 0%, #a7f3d0 48%, #64748b 49%, #334155 100%)"
+            ),
+            "overlay": (
+                "linear-gradient(90deg, rgba(255,255,255,.18) 0 10%, transparent 10% 20%),"
+                "linear-gradient(0deg, transparent 0 73%, rgba(255,255,255,.35) 74% 75%, transparent 76%),"
+                "repeating-linear-gradient(90deg, transparent 0 30px, rgba(255,255,255,.2) 31px 32px)"
+            ),
+            "border": "#22c7a9",
+            "shadow": "0 12px 26px rgba(20, 184, 166, .26)",
+            "badge": "#0f766e",
+        },
+        "SR": {
+            "background": (
+                "radial-gradient(circle at 20% 22%, rgba(255,255,255,.95) 0 4%, transparent 10%),"
+                "radial-gradient(circle at 78% 18%, rgba(255,255,255,.9) 0 3%, transparent 9%),"
+                "radial-gradient(circle at 58% 30%, rgba(251,191,36,.8) 0 8%, transparent 20%),"
+                "linear-gradient(180deg, #fef3c7 0%, #f9a8d4 42%, #7c3aed 43%, #312e81 100%)"
+            ),
+            "overlay": (
+                "linear-gradient(0deg, transparent 0 70%, rgba(255,255,255,.28) 71% 72%, transparent 73%),"
+                "repeating-linear-gradient(115deg, transparent 0 28px, rgba(255,255,255,.20) 29px 30px)"
+            ),
+            "border": "#f59e0b",
+            "shadow": "0 14px 30px rgba(245, 158, 11, .30)",
+            "badge": "#b45309",
+        },
+        "SSR": {
+            "background": (
+                "radial-gradient(circle at 50% 28%, rgba(255,255,255,.98) 0 10%, rgba(253,224,71,.45) 18%, transparent 34%),"
+                "radial-gradient(circle at 20% 22%, rgba(236,72,153,.75) 0 7%, transparent 18%),"
+                "radial-gradient(circle at 82% 20%, rgba(34,211,238,.8) 0 8%, transparent 20%),"
+                "linear-gradient(180deg, #f5d0fe 0%, #a78bfa 40%, #4338ca 41%, #111827 100%)"
+            ),
+            "overlay": (
+                "linear-gradient(125deg, transparent 0 18%, rgba(255,255,255,.42) 19% 20%, transparent 21% 43%, "
+                "rgba(255,255,255,.28) 44% 45%, transparent 46% 75%),"
+                "repeating-radial-gradient(circle at 50% 35%, rgba(255,255,255,.22) 0 2px, transparent 3px 18px)"
+            ),
+            "border": "#a855f7",
+            "shadow": "0 16px 34px rgba(168, 85, 247, .38)",
+            "badge": "#7e22ce",
+        },
     }
-    return colors.get(rarity, colors["N"])
+    return styles.get(rarity, styles["N"])
 
 
 def render_centered_pet_art(pet: dict, width: int = 150, height: int = 150) -> None:
@@ -734,27 +790,53 @@ def render_centered_pet_art(pet: dict, width: int = 150, height: int = 150) -> N
     if not data_uri:
         st.image(pet_file, width=width)
         return
-    bg, border = _pet_card_colors(pet.get("rarity") or "N")
+    rarity = pet.get("rarity") or "N"
+    style = _pet_card_style(rarity)
     st.markdown(
         f"""
         <div style="
             width:100%;
             min-height:{height + 28}px;
+            position:relative;
             display:flex;
             align-items:center;
             justify-content:center;
-            background:{bg};
-            border:1px solid {border};
-            border-radius:12px;
+            overflow:hidden;
+            background:{style['background']};
+            border:1px solid {style['border']};
+            border-radius:14px;
             padding:14px;
             box-sizing:border-box;
+            box-shadow:{style['shadow']};
         ">
+            <div style="
+                position:absolute;
+                inset:0;
+                background:{style['overlay']};
+                opacity:.95;
+                pointer-events:none;
+            "></div>
+            <div style="
+                position:absolute;
+                top:8px;
+                right:9px;
+                padding:2px 8px;
+                border-radius:999px;
+                background:{style['badge']};
+                color:white;
+                font-size:11px;
+                font-weight:700;
+                letter-spacing:0;
+            ">{rarity}</div>
             <img src="{data_uri}" style="
                 width:{width}px;
                 height:{height}px;
                 object-fit:contain;
                 display:block;
                 margin:0 auto;
+                position:relative;
+                z-index:1;
+                filter:drop-shadow(0 8px 10px rgba(15,23,42,.22));
             " />
         </div>
         """,
