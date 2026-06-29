@@ -184,6 +184,13 @@ GACHA_RARITY_WEIGHTS = {
     "SSR": 1,
 }
 
+GACHA_COST = 20
+EVOLUTION_RULES = {
+    "N": {"to": "R", "cost": 0, "label": "N → R"},
+    "R": {"to": "SR", "cost": 20, "label": "R → SR"},
+    "SR": {"to": "SSR", "cost": 50, "label": "SR → SSR"},
+}
+
 # ── 功能 A：生成菜單時可勾選的「重點加強」身體素質項目（依類別排序，可複選） ──
 # ⚠️ 這些字串會被功能 D 的階段建議用來「預選」，兩邊務必一致
 EMPHASIS_OPTIONS = [
@@ -856,6 +863,39 @@ def grant_student_pet(student_id: int, pet_id: str, source: str = "gacha") -> bo
         return False
 
 
+def change_student_pet_quantity(
+    student_id: int,
+    pet_id: str,
+    delta: int,
+    source: str = "evolution",
+) -> bool:
+    """調整寵物持有數量；數量歸零時移除該列。"""
+    try:
+        existing = (
+            supabase.table("student_pets")
+            .select("*")
+            .eq("student_id", student_id)
+            .eq("pet_id", pet_id)
+            .limit(1)
+            .execute()
+        )
+        if not existing.data:
+            return False
+        current = existing.data[0]
+        new_quantity = (current.get("quantity") or 0) + delta
+        if new_quantity <= 0:
+            supabase.table("student_pets").delete().eq("id", current["id"]).execute()
+        else:
+            supabase.table("student_pets").update({
+                "quantity": new_quantity,
+                "source": source,
+            }).eq("id", current["id"]).execute()
+        return True
+    except Exception as e:
+        print(f"[WARN] 寵物數量調整失敗: {e}")
+        return False
+
+
 def draw_gacha_pet(pets: list[dict]) -> dict | None:
     """依稀有度權重抽一隻寵物。"""
     if not pets:
@@ -867,6 +907,35 @@ def draw_gacha_pet(pets: list[dict]) -> dict | None:
     weights = [GACHA_RARITY_WEIGHTS[r] for r in rarities]
     picked_rarity = random.choices(rarities, weights=weights, k=1)[0]
     return random.choice(rarity_pool[picked_rarity])
+
+
+def draw_pet_by_rarity(pets: list[dict], rarity: str) -> dict | None:
+    candidates = [p for p in pets if p.get("rarity") == rarity]
+    return random.choice(candidates) if candidates else None
+
+
+def available_evolution_count(owned_pets: list[dict], rarity: str) -> int:
+    return sum(p.get("quantity") or 0 for p in owned_pets if p.get("rarity") == rarity) // 3
+
+
+def consume_three_pets_by_rarity(student_id: int, owned_pets: list[dict], rarity: str) -> bool:
+    """消耗任意 3 隻同稀有度寵物，優先消耗持有數較多的寵物。"""
+    candidates = sorted(
+        [p for p in owned_pets if p.get("rarity") == rarity and (p.get("quantity") or 0) > 0],
+        key=lambda p: (-(p.get("quantity") or 0), p.get("sort_order") or 999),
+    )
+    if sum(p.get("quantity") or 0 for p in candidates) < 3:
+        return False
+
+    remaining = 3
+    for pet in candidates:
+        if remaining <= 0:
+            break
+        consume = min(remaining, pet.get("quantity") or 0)
+        if consume > 0 and not change_student_pet_quantity(student_id, pet["id"], -consume):
+            return False
+        remaining -= consume
+    return remaining == 0
 
 
 def upload_video_to_supabase(student_id: int, video_bytes: bytes, filename: str) -> str:
@@ -2402,9 +2471,9 @@ def render_point_manager(student: dict, logs: list[dict], point_events: list[dic
 
 
 def render_avatar_card(student: dict) -> None:
-    """最小可用版角色卡：暱稱、人物模板、攜帶寵物。"""
+    """角色卡：暱稱、人物模板、攜帶寵物，選擇時即時預覽。"""
     st.markdown("## 🎮 我的角色卡")
-    st.caption("第一版先設定角色資料與陪伴寵物；裝備、配色與扭蛋動畫之後再接。")
+    st.caption("選擇人物或寵物時會先即時預覽，按儲存後才會寫入角色卡。")
 
     profile = get_avatar_profile(student)
     templates = get_avatar_templates(active_only=True)
@@ -2425,11 +2494,55 @@ def render_avatar_card(student: dict) -> None:
     if selected_pet_id not in pet_lookup:
         selected_pet_id = owned_pets[0]["id"] if owned_pets else None
 
-    selected_template = template_lookup[selected_template_id]
-    selected_pet = pet_lookup.get(selected_pet_id) if selected_pet_id else None
-    nickname = profile.get("nickname") or student.get("name") or ""
-
     card_col, form_col = st.columns([1, 1])
+    with form_col:
+        nickname_key = f"avatar_nickname_{student['id']}"
+        template_key = f"avatar_template_select_{student['id']}"
+        pet_key = f"avatar_pet_select_{student['id']}"
+
+        if nickname_key not in st.session_state:
+            st.session_state[nickname_key] = profile.get("nickname") or student.get("name") or ""
+        if template_key not in st.session_state or st.session_state[template_key] not in template_lookup:
+            st.session_state[template_key] = selected_template_id
+        if owned_pets and (pet_key not in st.session_state or st.session_state[pet_key] not in pet_lookup):
+            st.session_state[pet_key] = selected_pet_id
+
+        new_nickname = st.text_input("角色暱稱", max_chars=20, key=nickname_key)
+        template_ids = [t["id"] for t in templates]
+        template_id = st.selectbox(
+            "選擇人物",
+            template_ids,
+            format_func=lambda tid: template_lookup[tid].get("display_name", tid),
+            key=template_key,
+        )
+
+        pet_id = None
+        pet_ids = [p["id"] for p in owned_pets]
+        if pet_ids:
+            pet_id = st.selectbox(
+                "攜帶寵物",
+                pet_ids,
+                format_func=lambda pid: (
+                    f"{pet_lookup[pid].get('display_name', pid)}"
+                    f"（{pet_lookup[pid].get('rarity', '')}｜持有 {pet_lookup[pid].get('quantity', 1)}）"
+                ),
+                key=pet_key,
+            )
+        else:
+            st.info("還沒有寵物。請先到寵物扭蛋抽一隻，或確認 `student_pets` 表已建立。")
+
+        if st.button("💾 儲存角色卡", type="primary", use_container_width=True):
+            clean_nickname = new_nickname.strip() or student.get("name") or "小選手"
+            if save_avatar_profile(student["id"], clean_nickname, template_id, pet_id):
+                st.success("角色卡已更新！")
+                st.rerun()
+            else:
+                st.error("角色卡儲存失敗，請先確認 Supabase 已執行 `migrate_v8.sql`。")
+
+    selected_template = template_lookup.get(st.session_state.get(f"avatar_template_select_{student['id']}")) or template_lookup[selected_template_id]
+    selected_pet = pet_lookup.get(st.session_state.get(f"avatar_pet_select_{student['id']}")) if owned_pets else None
+    nickname = st.session_state.get(f"avatar_nickname_{student['id']}", profile.get("nickname") or student.get("name") or "")
+
     with card_col:
         with st.container(border=True):
             img_col, info_col = st.columns([1, 1])
@@ -2459,63 +2572,96 @@ def render_avatar_card(student: dict) -> None:
                 else:
                     st.caption("尚未擁有可攜帶的寵物。")
 
-    with form_col:
-        with st.form(f"avatar_profile_{student['id']}"):
-            new_nickname = st.text_input("角色暱稱", value=nickname, max_chars=20)
-            template_ids = [t["id"] for t in templates]
-            template_id = st.selectbox(
-                "選擇人物",
-                template_ids,
-                index=template_ids.index(selected_template_id),
-                format_func=lambda tid: template_lookup[tid].get("display_name", tid),
-            )
 
-            pet_ids = [p["id"] for p in owned_pets]
-            pet_id = None
-            if pet_ids:
-                pet_id = st.selectbox(
-                    "攜帶寵物",
-                    pet_ids,
-                    index=pet_ids.index(selected_pet_id) if selected_pet_id in pet_ids else 0,
-                    format_func=lambda pid: (
-                        f"{pet_lookup[pid].get('display_name', pid)}"
-                        f"（{pet_lookup[pid].get('rarity', '')}）"
-                    ),
-                )
-            else:
-                st.info("還沒有寵物。第一版會先補發起始寵物；若仍看不到，請確認 `student_pets` 表已建立。")
+def render_pet_inventory_and_evolution(student: dict, logs: list[dict], point_events: list[dict]) -> None:
+    """寵物背包與進化，放在角色卡同一頁下方。"""
+    st.markdown("---")
+    st.markdown("## 🐣 寵物背包與進化")
 
-            if st.form_submit_button("💾 儲存角色卡", type="primary", use_container_width=True):
-                clean_nickname = new_nickname.strip() or student.get("name") or "小選手"
-                if save_avatar_profile(student["id"], clean_nickname, template_id, pet_id):
-                    st.success("角色卡已更新！")
+    owned_pets = get_student_pets(student["id"])
+    pet_catalog = get_pet_catalog(active_only=True)
+    score = total_score(logs, point_events)
+
+    total_pets = sum(p.get("quantity") or 0 for p in owned_pets)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("持有寵物", total_pets)
+    m2.metric("可進化次數", sum(available_evolution_count(owned_pets, r) for r in EVOLUTION_RULES))
+    m3.metric("目前積分", score)
+
+    if not owned_pets:
+        st.info("目前還沒有寵物。去寵物扭蛋抽第一隻吧！")
+        return
+
+    cols = st.columns(4)
+    for idx, pet in enumerate(owned_pets):
+        with cols[idx % 4]:
+            with st.container(border=True):
+                pet_file = _asset_file(pet.get("asset_path"))
+                if pet_file:
+                    st.image(pet_file, width=120)
+                st.markdown(f"**{pet.get('display_name', pet['id'])}**")
+                st.caption(f"{pet.get('rarity', '')}｜持有 {pet.get('quantity', 1)}")
+                if pet.get("species_note"):
+                    st.caption(pet["species_note"])
+
+    st.markdown("### ✨ 寵物進化")
+    st.caption("消耗任意 3 隻同等級寵物，隨機進化成下一階。")
+    evo_cols = st.columns(3)
+    for idx, (from_rarity, rule) in enumerate(EVOLUTION_RULES.items()):
+        can_evolve = available_evolution_count(owned_pets, from_rarity)
+        cost = rule["cost"]
+        disabled = can_evolve <= 0 or score < cost
+        with evo_cols[idx]:
+            with st.container(border=True):
+                st.markdown(f"#### {rule['label']}")
+                st.caption(f"消耗：任意 3 隻 {from_rarity}" + (f" + {cost} 積分" if cost else ""))
+                st.caption(f"目前可進化：{can_evolve} 次")
+                if score < cost:
+                    st.warning(f"積分不足，還差 {cost - score} 分。")
+                if st.button(
+                    "進化一次",
+                    key=f"evolve_{student['id']}_{from_rarity}",
+                    disabled=disabled,
+                    use_container_width=True,
+                ):
+                    result = draw_pet_by_rarity(pet_catalog, rule["to"])
+                    if not result:
+                        st.error("找不到下一階寵物資料。")
+                        return
+                    if cost > 0 and total_score(logs, get_point_events(student["id"])) < cost:
+                        st.error("積分不足，無法進化。")
+                        return
+                    if not consume_three_pets_by_rarity(student["id"], owned_pets, from_rarity):
+                        st.error("寵物數量不足，無法進化。")
+                        return
+                    if not grant_student_pet(student["id"], result["id"], source="evolution"):
+                        st.error("進化結果寫入失敗。")
+                        return
+                    if cost > 0:
+                        add_point_event(
+                            student["id"],
+                            -cost,
+                            f"{rule['label']} 寵物進化",
+                            f"消耗 3 隻 {from_rarity} 寵物，進化為 {result.get('display_name', result['id'])}",
+                            event_type="pet_evolution",
+                            created_by="system",
+                        )
+                    st.success(f"進化成功！獲得 {result.get('display_name', result['id'])}")
+                    st.balloons()
                     st.rerun()
-                else:
-                    st.error("角色卡儲存失敗，請先在 Supabase 執行 `migrate_v8.sql`。")
-
-    if owned_pets:
-        with st.expander("🐣 我的寵物", expanded=False):
-            cols = st.columns(4)
-            for idx, pet in enumerate(owned_pets):
-                with cols[idx % 4]:
-                    with st.container(border=True):
-                        pet_file = _asset_file(pet.get("asset_path"))
-                        if pet_file:
-                            st.image(pet_file, width=110)
-                        st.markdown(f"**{pet.get('display_name', pet['id'])}**")
-                        st.caption(f"{pet.get('rarity', '')}｜持有 {pet.get('quantity', 1)}")
 
 
-def render_pet_gacha_machine(student: dict) -> None:
-    """第一版寵物扭蛋機：先接抽寵物與入庫，動畫素材先以靜態機台展示。"""
+def render_pet_gacha_machine(student: dict, logs: list[dict], point_events: list[dict]) -> None:
+    """寵物扭蛋機：花積分抽寵物，結果寫入背包。"""
     st.markdown("## 🥚 寵物扭蛋機")
-    st.caption("第一版先開放抽寵物與收集；之後再接完整轉鈕、搖晃、掉蛋動畫。")
+    st.caption("花積分抽寵物，重複抽到會增加持有數量。")
 
     pet_catalog = get_pet_catalog(active_only=True)
     if not pet_catalog:
         st.warning("目前沒有可抽的寵物資料，請確認 `pet_catalog` seed 已建立。")
         return
 
+    score = total_score(logs, point_events)
     machine_col, result_col = st.columns([1, 1])
     with machine_col:
         machine_file = _asset_file(GACHA_MACHINE_ASSETS["preview"])
@@ -2524,13 +2670,30 @@ def render_pet_gacha_machine(student: dict) -> None:
         else:
             st.info("扭蛋機素材尚未找到。")
 
+        st.metric("目前積分", score)
+        st.caption(f"普通蛋：{GACHA_COST} 分 / 次")
         st.caption("目前機率：N 70%｜R 22%｜SR 7%｜SSR 1%")
-        if st.button("🎰 轉一次", type="primary", use_container_width=True):
+        if score < GACHA_COST:
+            st.warning(f"積分不足，還差 {GACHA_COST - score} 分。")
+        if st.button("🎰 花 20 分轉一次", type="primary", use_container_width=True, disabled=score < GACHA_COST):
+            latest_events = get_point_events(student["id"])
+            latest_score = total_score(get_training_logs(student["id"]), latest_events)
+            if latest_score < GACHA_COST:
+                st.error("積分不足，無法抽扭蛋。")
+                return
             result = draw_gacha_pet(pet_catalog)
             if not result:
                 st.error("沒有可抽取的寵物。")
                 return
             if grant_student_pet(student["id"], result["id"], source="gacha"):
+                add_point_event(
+                    student["id"],
+                    -GACHA_COST,
+                    "寵物扭蛋",
+                    f"抽到 {result.get('display_name', result['id'])}",
+                    event_type="pet_gacha",
+                    created_by="system",
+                )
                 st.session_state[f"last_gacha_result_{student['id']}"] = result
                 st.success(f"抽到 {result.get('display_name', result['id'])}！")
                 st.balloons()
@@ -2971,13 +3134,16 @@ def main():
 
     # 2) 資料已完善但還沒有菜單 → 可先生成菜單，也可直接使用獨立影片助理教練
     if curriculum is None:
+        logs = get_training_logs(student["id"])
+        point_events = get_point_events(student["id"])
         tab_generate, tab_avatar, tab_gacha, tab_video = st.tabs(["🗓️ 生成訓練菜單", "🎮 角色卡", "🥚 寵物扭蛋", "🎥 影片助理教練"])
         with tab_generate:
             render_generate_menu(student)
         with tab_avatar:
             render_avatar_card(student)
+            render_pet_inventory_and_evolution(student, logs, point_events)
         with tab_gacha:
-            render_pet_gacha_machine(student)
+            render_pet_gacha_machine(student, logs, point_events)
         with tab_video:
             render_video_coach(student)
         return
@@ -3066,8 +3232,9 @@ def main():
         render_checkin(student, logs, point_events)
     with tabs[2]:
         render_avatar_card(student)
+        render_pet_inventory_and_evolution(student, logs, point_events)
     with tabs[3]:
-        render_pet_gacha_machine(student)
+        render_pet_gacha_machine(student, logs, point_events)
     with tabs[4]:
         render_video_coach(student)
     with tabs[5]:
