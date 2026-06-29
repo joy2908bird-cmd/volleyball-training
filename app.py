@@ -8,6 +8,7 @@ import json
 import time
 import random
 import tempfile
+import base64
 from datetime import datetime, date
 
 import streamlit as st
@@ -699,6 +700,66 @@ def _asset_file(asset_path: str | None) -> str | None:
     clean_path = asset_path.lstrip("/").replace("/", os.sep)
     local_path = os.path.join(APP_DIR, clean_path)
     return local_path if os.path.exists(local_path) else None
+
+
+@st.cache_data(show_spinner=False)
+def _image_data_uri(local_path: str) -> str | None:
+    """把本機圖片轉成 HTML 可用的 data URI，方便置中與加背景。"""
+    try:
+        with open(local_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+        return f"data:image/png;base64,{encoded}"
+    except Exception as e:
+        print(f"[WARN] 圖片轉換失敗: {e}")
+        return None
+
+
+def _pet_card_colors(rarity: str) -> tuple[str, str]:
+    colors = {
+        "N": ("linear-gradient(135deg, #f8fafc 0%, #e0f2fe 100%)", "#bfdbfe"),
+        "R": ("linear-gradient(135deg, #ecfeff 0%, #ccfbf1 48%, #e0e7ff 100%)", "#5eead4"),
+        "SR": ("linear-gradient(135deg, #fff7ed 0%, #fde68a 45%, #fbcfe8 100%)", "#f59e0b"),
+        "SSR": ("linear-gradient(135deg, #fdf4ff 0%, #c4b5fd 42%, #fde68a 100%)", "#a855f7"),
+    }
+    return colors.get(rarity, colors["N"])
+
+
+def render_centered_pet_art(pet: dict, width: int = 150, height: int = 150) -> None:
+    """用稀有度背景顯示寵物，解決透明圖偏左與白底太空的問題。"""
+    pet_file = _asset_file(pet.get("asset_path"))
+    if not pet_file:
+        st.info("寵物素材尚未找到。")
+        return
+    data_uri = _image_data_uri(pet_file)
+    if not data_uri:
+        st.image(pet_file, width=width)
+        return
+    bg, border = _pet_card_colors(pet.get("rarity") or "N")
+    st.markdown(
+        f"""
+        <div style="
+            width:100%;
+            min-height:{height + 28}px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            background:{bg};
+            border:1px solid {border};
+            border-radius:12px;
+            padding:14px;
+            box-sizing:border-box;
+        ">
+            <img src="{data_uri}" style="
+                width:{width}px;
+                height:{height}px;
+                object-fit:contain;
+                display:block;
+                margin:0 auto;
+            " />
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _seed_lookup(seed_rows: list[dict]) -> dict[str, dict]:
@@ -2560,10 +2621,8 @@ def render_avatar_card(student: dict) -> None:
                     st.info(f"「{selected_template['catchphrase']}」")
 
                 if selected_pet:
-                    pet_file = _asset_file(selected_pet.get("asset_path"))
                     st.markdown("#### 攜帶寵物")
-                    if pet_file:
-                        st.image(pet_file, width=120)
+                    render_centered_pet_art(selected_pet, width=120, height=120)
                     st.markdown(
                         f"**{selected_pet.get('display_name', selected_pet['id'])}**"
                         f"　{selected_pet.get('rarity', '')}"
@@ -2596,9 +2655,7 @@ def render_pet_inventory_and_evolution(student: dict, logs: list[dict], point_ev
     for idx, pet in enumerate(owned_pets):
         with cols[idx % 4]:
             with st.container(border=True):
-                pet_file = _asset_file(pet.get("asset_path"))
-                if pet_file:
-                    st.image(pet_file, width=120)
+                render_centered_pet_art(pet, width=132, height=132)
                 st.markdown(f"**{pet.get('display_name', pet['id'])}**")
                 st.caption(f"{pet.get('rarity', '')}｜持有 {pet.get('quantity', 1)}")
                 if pet.get("species_note"):
@@ -2710,11 +2767,15 @@ def render_pet_gacha_machine(student: dict, logs: list[dict], point_events: list
                     flash_file = _asset_file(GACHA_MACHINE_ASSETS["rarity_flash_ssr"])
                     if flash_file:
                         st.image(flash_file, width=180)
-                pet_file = _asset_file(result.get("asset_path"))
-                if pet_file:
-                    st.image(pet_file, width=180)
-                st.markdown(f"### {result.get('display_name', result['id'])}")
-                st.markdown(f"稀有度：**{rarity}**")
+                render_centered_pet_art(result, width=170, height=170)
+                st.markdown(
+                    f"<div style='text-align:center;'><h3>{result.get('display_name', result['id'])}</h3></div>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    f"<div style='text-align:center;'>稀有度：<b>{rarity}</b></div>",
+                    unsafe_allow_html=True,
+                )
                 st.caption(result.get("species_note", ""))
         else:
             st.info("按下轉一次後，抽到的寵物會出現在這裡。")
