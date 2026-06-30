@@ -1885,7 +1885,8 @@ def item_badge(it: dict) -> str:
 _SESSION_HTML = r"""
 <div id="vt">
   <style>
-    #vt { font-family: -apple-system, "Microsoft JhengHei", sans-serif; color:#1f2937; }
+    html, body { margin:0; padding:0; overflow:auto; -webkit-overflow-scrolling:touch; }
+    #vt { font-family: -apple-system, "Microsoft JhengHei", sans-serif; color:#1f2937; padding:0 0 92px; }
     #vt button { font-size:1.05rem; padding:12px 18px; margin:6px 4px 0 0; border:none;
       border-radius:10px; cursor:pointer; background:#FF6B35; color:#fff; font-weight:700; }
     #vt button.sec { background:#e5e7eb; color:#374151; }
@@ -1897,8 +1898,21 @@ _SESSION_HTML = r"""
     #vt #inote { color:#6b7280; margin-bottom:10px; }
     #vt #timer { font-size:3.4rem; font-weight:800; color:#FF6B35; letter-spacing:2px; }
     #vt #reps { font-size:1.15rem; line-height:1.8; }
+    #vt #controls {
+      position:sticky; bottom:0; z-index:10; margin-top:10px; padding:10px 0 12px;
+      background:linear-gradient(180deg, rgba(255,255,255,.78), #fff 24%);
+      display:flex; flex-wrap:wrap; gap:6px;
+    }
     #vt #done { display:none; background:#ecfdf5; border:2px solid #22c55e; border-radius:14px;
       padding:24px; text-align:center; font-size:1.3rem; font-weight:800; color:#15803d; margin-top:6px; }
+    @media (max-width: 520px) {
+      #vt { padding-bottom:118px; }
+      #vt button { width:100%; min-height:48px; margin:0; font-size:1.02rem; }
+      #vt #controls { gap:8px; }
+      #vt #timer { font-size:3rem; }
+      #vt #card { padding:14px; }
+      #vt #iname { font-size:1.22rem; }
+    }
   </style>
 
   <button id="startBtn" class="start">▶ 開始今天的訓練！</button>
@@ -2072,7 +2086,7 @@ def render_training_session(items: list[dict]) -> None:
     if not items:
         return
     payload = json.dumps(items, ensure_ascii=False)
-    components.html(_SESSION_HTML.replace("__ITEMS__", payload), height=420)
+    components.html(_SESSION_HTML.replace("__ITEMS__", payload), height=680, scrolling=True)
 
 
 def _to_int(v, default=0) -> int:
@@ -2268,25 +2282,27 @@ def render_day_editor(student: dict, curriculum: dict, week_num: int, day: dict)
 
 def render_day_checkin(student: dict, week_number: int, day_num: int, logs: list[dict]) -> None:
     """每一天各自獨立的打卡按鈕（第 N 天做完就打勾，與其他天、與日曆都無關）。"""
-    st.markdown("---")
     done_log = next(
         (l for l in logs if l.get("is_completed")
          and l.get("week_number") == week_number and l.get("day_number") == day_num),
         None,
     )
     if done_log:
+        st.markdown("---")
         st.success(f"🌟 第 {day_num} 天已完成！得分 {done_log.get('score', 10)} 分，換下一天繼續加油！")
         return
-    st.markdown(f"**做完「第 {day_num} 天」的訓練了嗎？按這裡打卡領積分！** 👇")
-    if st.button(
-        f"✅ 完成第 {day_num} 天，打卡！",
-        key=f"checkin_w{week_number}_d{day_num}",
-        use_container_width=True, type="primary",
-    ):
-        create_session_log(student["id"], week_number, day_num)
-        st.balloons()
-        st.success(f"🎊 第 {day_num} 天打卡成功！獲得 10 積分！")
-        st.rerun()
+
+    with st.expander(f"✅ 全部項目做完後，再打卡第 {day_num} 天", expanded=False):
+        st.caption("先把上方播放器的每個項目都完成；全部做完後再按這裡領積分。")
+        if st.button(
+            f"✅ 完成第 {day_num} 天，打卡！",
+            key=f"checkin_w{week_number}_d{day_num}",
+            use_container_width=True, type="primary",
+        ):
+            create_session_log(student["id"], week_number, day_num)
+            st.balloons()
+            st.success(f"🎊 第 {day_num} 天打卡成功！獲得 10 積分！")
+            st.rerun()
 
 
 def render_curriculum(curriculum: dict, current_week: int, student: dict | None = None,
