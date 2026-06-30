@@ -2895,18 +2895,18 @@ def render_avatar_card(student: dict) -> None:
                 else:
                     st.caption("尚未擁有可攜帶的寵物。")
 
-    st.markdown("### 角色圖鑑")
-    st.caption("未開放角色會先顯示鎖定狀態，之後可依成就條件解鎖。")
-    character_cols = st.columns(4)
-    for idx, template in enumerate(templates):
-        unlocked = is_avatar_template_unlocked(template)
-        with character_cols[idx % 4]:
-            with st.container(border=True):
-                render_character_card_image(template, width=190, locked=not unlocked)
-                lock_label = "" if unlocked else " 🔒"
-                st.markdown(f"**{template.get('display_name', template['id'])}{lock_label}**")
-                st.caption(template.get("role_name", ""))
-                st.caption(CHARACTER_UNLOCK_CONDITIONS.get(template.get("id"), "之後由教練設定"))
+    with st.expander("角色圖鑑", expanded=False):
+        st.caption("未開放角色會先顯示鎖定狀態，之後可依成就條件解鎖。")
+        character_cols = st.columns(4)
+        for idx, template in enumerate(templates):
+            unlocked = is_avatar_template_unlocked(template)
+            with character_cols[idx % 4]:
+                with st.container(border=True):
+                    render_character_card_image(template, width=190, locked=not unlocked)
+                    lock_label = "" if unlocked else " 🔒"
+                    st.markdown(f"**{template.get('display_name', template['id'])}{lock_label}**")
+                    st.caption(template.get("role_name", ""))
+                    st.caption(CHARACTER_UNLOCK_CONDITIONS.get(template.get("id"), "之後由教練設定"))
 
 
 def render_pet_inventory_and_evolution(student: dict, logs: list[dict], point_events: list[dict]) -> None:
