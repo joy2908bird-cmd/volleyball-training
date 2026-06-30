@@ -192,6 +192,30 @@ EVOLUTION_RULES = {
     "SR": {"to": "SSR", "cost": 50, "label": "SR → SSR"},
 }
 
+PET_CARD_ASSETS = {
+    "pet_n_01": "assets/pets/cards/pet_n_01_card.png",
+    "pet_n_02": "assets/pets/cards/pet_n_02_card.png",
+    "pet_n_03": "assets/pets/cards/pet_n_03_card.png",
+    "pet_n_04": "assets/pets/cards/pet_n_04_card.png",
+    "pet_n_05": "assets/pets/cards/pet_n_05_card.png",
+    "pet_n_06": "assets/pets/cards/pet_n_06_card.png",
+    "pet_r_01": "assets/pets/cards/pet_r_01_card.png",
+    "pet_r_02": "assets/pets/cards/pet_r_02_card.png",
+    "pet_r_03": "assets/pets/cards/pet_r_03_card.png",
+    "pet_sr_01": "assets/pets/cards/pet_sr_01_card.png",
+    "pet_sr_02": "assets/pets/cards/pet_sr_02_card.png",
+    "pet_ssr_01": "assets/pets/cards/pet_ssr_01_card.png",
+    "pet_ssr_02": "assets/pets/cards/pet_ssr_02_card.png",
+}
+
+EVOLUTION_ICON_ASSETS = {
+    "combine": "assets/evolution/icons/icon_combine.png",
+    "training": "assets/evolution/icons/icon_training.png",
+    "upgrade_arrow": "assets/evolution/icons/icon_upgrade_arrow.png",
+    "score_cost": "assets/evolution/icons/icon_score_cost.png",
+    "final_star": "assets/evolution/icons/icon_final_star.png",
+}
+
 # ── 功能 A：生成菜單時可勾選的「重點加強」身體素質項目（依類別排序，可複選） ──
 # ⚠️ 這些字串會被功能 D 的階段建議用來「預選」，兩邊務必一致
 EMPHASIS_OPTIONS = [
@@ -842,6 +866,27 @@ def render_centered_pet_art(pet: dict, width: int = 150, height: int = 150) -> N
         """,
         unsafe_allow_html=True,
     )
+
+
+def _pet_card_path(pet_id: str | None) -> str | None:
+    if not pet_id:
+        return None
+    return _asset_file(PET_CARD_ASSETS.get(pet_id))
+
+
+def render_pet_card_image(pet: dict, width: int = 210) -> None:
+    """顯示 handoff v1.1 的完整寵物卡圖；不是前端重畫卡框。"""
+    card_path = _pet_card_path(pet.get("id"))
+    if card_path:
+        st.image(card_path, width=width)
+    else:
+        render_centered_pet_art(pet, width=min(width, 160), height=min(width, 160))
+
+
+def render_icon_asset(icon_key: str, width: int = 44) -> None:
+    icon_path = _asset_file(EVOLUTION_ICON_ASSETS.get(icon_key))
+    if icon_path:
+        st.image(icon_path, width=width)
 
 
 def _seed_lookup(seed_rows: list[dict]) -> dict[str, dict]:
@@ -2733,7 +2778,7 @@ def render_avatar_card(student: dict) -> None:
 
                 if selected_pet:
                     st.markdown("#### 攜帶寵物")
-                    render_centered_pet_art(selected_pet, width=120, height=120)
+                    render_pet_card_image(selected_pet, width=155)
                     st.markdown(
                         f"**{selected_pet.get('display_name', selected_pet['id'])}**"
                         f"　{selected_pet.get('rarity', '')}"
@@ -2746,7 +2791,7 @@ def render_avatar_card(student: dict) -> None:
 def render_pet_inventory_and_evolution(student: dict, logs: list[dict], point_events: list[dict]) -> None:
     """寵物背包與進化，放在角色卡同一頁下方。"""
     st.markdown("---")
-    st.markdown("## 🐣 寵物背包與進化")
+    st.markdown("## 🐣 已收集寵物")
 
     owned_pets = get_student_pets(student["id"])
     pet_catalog = get_pet_catalog(active_only=True)
@@ -2762,18 +2807,31 @@ def render_pet_inventory_and_evolution(student: dict, logs: list[dict], point_ev
         st.info("目前還沒有寵物。去寵物扭蛋抽第一隻吧！")
         return
 
-    cols = st.columns(4)
-    for idx, pet in enumerate(owned_pets):
-        with cols[idx % 4]:
-            with st.container(border=True):
-                render_centered_pet_art(pet, width=132, height=132)
-                st.markdown(f"**{pet.get('display_name', pet['id'])}**")
-                st.caption(f"{pet.get('rarity', '')}｜持有 {pet.get('quantity', 1)}")
-                if pet.get("species_note"):
-                    st.caption(pet["species_note"])
+    bag_tab, evo_tab = st.tabs(["已收集圖鑑", "寵物進化"])
+    with bag_tab:
+        st.caption("只顯示已收集的寵物，未發現的寵物先保留驚喜感。")
+        cols = st.columns(4)
+        for idx, pet in enumerate(owned_pets):
+            with cols[idx % 4]:
+                with st.container(border=True):
+                    render_pet_card_image(pet, width=210)
+                    st.markdown(f"**{pet.get('display_name', pet['id'])}**")
+                    st.caption(f"{pet.get('rarity', '')}｜持有 {pet.get('quantity', 1)}")
+                    if pet.get("species_note"):
+                        st.caption(pet["species_note"])
 
-    st.markdown("### ✨ 寵物進化")
-    st.caption("消耗任意 3 隻同等級寵物，隨機進化成下一階。")
+    with evo_tab:
+        st.caption("消耗任意 3 隻同等級寵物，隨機進化成下一階。")
+        render_pet_evolution_rules(student, owned_pets, pet_catalog, logs, score)
+
+
+def render_pet_evolution_rules(
+    student: dict,
+    owned_pets: list[dict],
+    pet_catalog: list[dict],
+    logs: list[dict],
+    score: int,
+) -> None:
     evo_cols = st.columns(3)
     for idx, (from_rarity, rule) in enumerate(EVOLUTION_RULES.items()):
         can_evolve = available_evolution_count(owned_pets, from_rarity)
@@ -2781,11 +2839,20 @@ def render_pet_inventory_and_evolution(student: dict, logs: list[dict], point_ev
         disabled = can_evolve <= 0 or score < cost
         with evo_cols[idx]:
             with st.container(border=True):
-                st.markdown(f"#### {rule['label']}")
+                icon_key = "combine" if from_rarity == "N" else "training" if from_rarity == "R" else "final_star"
+                icon_col, title_col = st.columns([1, 4])
+                with icon_col:
+                    render_icon_asset(icon_key, width=42)
+                with title_col:
+                    st.markdown(f"#### {rule['label']}")
+                    st.caption(f"進化成隨機 {rule['to']} 寵物")
+                render_icon_asset("upgrade_arrow", width=38)
                 st.caption(f"消耗：任意 3 隻 {from_rarity}" + (f" + {cost} 積分" if cost else ""))
                 st.caption(f"目前可進化：{can_evolve} 次")
                 if score < cost:
                     st.warning(f"積分不足，還差 {cost - score} 分。")
+                elif can_evolve <= 0:
+                    st.info(f"再收集一些 {from_rarity} 寵物就能進化。")
                 if st.button(
                     "進化一次",
                     key=f"evolve_{student['id']}_{from_rarity}",
@@ -2878,7 +2945,7 @@ def render_pet_gacha_machine(student: dict, logs: list[dict], point_events: list
                     flash_file = _asset_file(GACHA_MACHINE_ASSETS["rarity_flash_ssr"])
                     if flash_file:
                         st.image(flash_file, width=180)
-                render_centered_pet_art(result, width=170, height=170)
+                render_pet_card_image(result, width=260)
                 st.markdown(
                     f"<div style='text-align:center;'><h3>{result.get('display_name', result['id'])}</h3></div>",
                     unsafe_allow_html=True,
