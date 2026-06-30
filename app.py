@@ -1027,6 +1027,7 @@ def get_avatar_profile(student: dict) -> dict:
     default_profile = {
         "student_id": student["id"],
         "nickname": student.get("name") or "",
+        "motto": "",
         "avatar_template_id": "beginner",
         "companion_pet_id": "pet_n_01",
     }
@@ -1047,22 +1048,32 @@ def get_avatar_profile(student: dict) -> dict:
 def save_avatar_profile(
     student_id: int,
     nickname: str,
+    motto: str,
     avatar_template_id: str,
     companion_pet_id: str | None,
-) -> bool:
+) -> str:
     data = {
         "student_id": student_id,
         "nickname": nickname,
+        "motto": motto,
         "avatar_template_id": avatar_template_id,
         "companion_pet_id": companion_pet_id,
         "updated_at": datetime.now().isoformat(),
     }
     try:
         supabase.table("avatar_profiles").upsert(data, on_conflict="student_id").execute()
-        return True
+        return "ok"
     except Exception as e:
+        if "motto" in str(e).lower():
+            data.pop("motto", None)
+            try:
+                supabase.table("avatar_profiles").upsert(data, on_conflict="student_id").execute()
+                return "missing_motto_column"
+            except Exception as retry_error:
+                print(f"[WARN] 儲存 avatar_profiles 失敗（可能尚未執行 migrate_v8.sql）: {retry_error}")
+                return "error"
         print(f"[WARN] 儲存 avatar_profiles 失敗（可能尚未執行 migrate_v8.sql）: {e}")
-        return False
+        return "error"
 
 
 def ensure_starter_pet(student_id: int) -> None:
@@ -2810,17 +2821,21 @@ def render_avatar_card(student: dict) -> None:
     card_col, form_col = st.columns([1, 1])
     with form_col:
         nickname_key = f"avatar_nickname_{student['id']}"
+        motto_key = f"avatar_motto_{student['id']}"
         template_key = f"avatar_template_select_{student['id']}"
         pet_key = f"avatar_pet_select_{student['id']}"
 
         if nickname_key not in st.session_state:
             st.session_state[nickname_key] = profile.get("nickname") or student.get("name") or ""
+        if motto_key not in st.session_state:
+            st.session_state[motto_key] = profile.get("motto") or ""
         if template_key not in st.session_state or st.session_state[template_key] not in template_lookup:
             st.session_state[template_key] = selected_template_id
         if owned_pets and (pet_key not in st.session_state or st.session_state[pet_key] not in pet_lookup):
             st.session_state[pet_key] = selected_pet_id
 
         new_nickname = st.text_input("角色暱稱", max_chars=20, key=nickname_key)
+        new_motto = st.text_input("個人標語", max_chars=40, key=motto_key, placeholder="可以寫自己的加油口號")
         template_ids = [t["id"] for t in templates]
         template_id = st.selectbox(
             "選擇人物",
@@ -2853,15 +2868,20 @@ def render_avatar_card(student: dict) -> None:
 
         if st.button("💾 儲存角色卡", type="primary", use_container_width=True, disabled=template_locked):
             clean_nickname = new_nickname.strip() or student.get("name") or "小選手"
-            if save_avatar_profile(student["id"], clean_nickname, template_id, pet_id):
+            clean_motto = new_motto.strip()
+            save_result = save_avatar_profile(student["id"], clean_nickname, clean_motto, template_id, pet_id)
+            if save_result == "ok":
                 st.success("角色卡已更新！")
                 st.rerun()
+            elif save_result == "missing_motto_column":
+                st.warning("角色卡已更新，但資料庫還沒新增個人標語欄位；請先執行 migrate_v9.sql。")
             else:
                 st.error("角色卡儲存失敗，請先確認 Supabase 已執行 `migrate_v8.sql`。")
 
     selected_template = template_lookup.get(st.session_state.get(f"avatar_template_select_{student['id']}")) or template_lookup[selected_template_id]
     selected_pet = pet_lookup.get(st.session_state.get(f"avatar_pet_select_{student['id']}")) if owned_pets else None
     nickname = st.session_state.get(f"avatar_nickname_{student['id']}", profile.get("nickname") or student.get("name") or "")
+    motto = st.session_state.get(f"avatar_motto_{student['id']}", profile.get("motto") or "").strip()
 
     with card_col:
         with st.container(border=True):
@@ -2881,8 +2901,9 @@ def render_avatar_card(student: dict) -> None:
                         f"🔒 尚未開放："
                         f"{CHARACTER_UNLOCK_CONDITIONS.get(selected_template.get('id'), '之後由教練設定')}"
                     )
-                if selected_template.get("catchphrase"):
-                    st.info(f"「{selected_template['catchphrase']}」")
+                display_motto = motto or selected_template.get("catchphrase")
+                if display_motto:
+                    st.info(f"「{display_motto}」")
 
                 if selected_pet:
                     st.markdown("#### 攜帶寵物")
