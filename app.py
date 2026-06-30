@@ -2441,18 +2441,28 @@ def render_checkin(student: dict, logs: list[dict], point_events: list[dict] | N
     today_str = today.isoformat()
     st.markdown(f"📅 今天是 **{today.strftime('%Y 年 %m 月 %d 日')}**")
 
-    with st.container(border=True):
-        st.markdown("#### 🎁 獎勵積分制度")
-        r1, r2, r3 = st.columns(3)
-        r1.metric("完成 5 天", "+15")
-        r2.metric("完成 3 週", "+20")
-        r3.metric("比賽完畢", "+30")
-        st.caption("前兩項由系統依同一套菜單完成進度自動發放；比賽完畢由教練在後台加分。")
-
     today_logs = [
         l for l in logs
         if l.get("is_completed") and l.get("training_date") == today_str
     ]
+    today_training_points = sum(l.get("score") or 0 for l in today_logs)
+    today_events = [
+        e for e in point_events
+        if str(e.get("created_at") or "")[:10] == today_str
+    ]
+    today_bonus_points = sum(e.get("points") or 0 for e in today_events)
+    training_points = training_score_total(logs)
+    bonus_points = point_events_total(point_events)
+    current_total = training_points + bonus_points
+
+    with st.container(border=True):
+        st.markdown("#### ⭐ 目前積分")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("總積分", current_total)
+        c2.metric("訓練分", training_points)
+        c3.metric("獎勵 / 消耗", bonus_points)
+        c4.metric("今日獲得", today_training_points + today_bonus_points)
+        st.caption("總積分可用來抽寵物扭蛋與寵物進化；訓練打卡、連續完成、比賽獎勵都會累積在這裡。")
 
     if not today_logs:
         st.info("今天還沒完成任何一天喔！到「📋 訓練菜單」挑一天，跟著做完就打卡吧 💪")
@@ -2466,10 +2476,6 @@ def render_checkin(student: dict, logs: list[dict], point_events: list[dict] | N
             st.caption("訓練完成紀錄。想請 AI 看動作時，請到「🎥 影片助理教練」。")
             st.markdown("---")
 
-    today_events = [
-        e for e in point_events
-        if str(e.get("created_at") or "")[:10] == today_str
-    ]
     if today_events:
         st.markdown("#### 🎉 今日獎勵積分")
         for e in today_events:
@@ -2487,6 +2493,13 @@ def render_checkin(student: dict, logs: list[dict], point_events: list[dict] | N
                 st.markdown(f"**{(e.get('created_at') or '')[:10]}**　{sign}{pts} 分　{e.get('reason','')}")
                 if e.get("note"):
                     st.caption(e["note"])
+
+    with st.expander("🎁 獎勵積分制度", expanded=False):
+        r1, r2, r3 = st.columns(3)
+        r1.metric("完成 5 天", "+15")
+        r2.metric("完成 3 週", "+20")
+        r3.metric("比賽完畢", "+30")
+        st.caption("前兩項由系統依同一套菜單完成進度自動發放；比賽完畢由教練在後台加分。抽扭蛋與寵物進化會扣除積分。")
 
 
 def render_journal_form(student: dict, plan_key: str, week: int, readonly: bool = False) -> None:
