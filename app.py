@@ -152,6 +152,28 @@ AVATAR_TEMPLATE_SEED = [
     },
 ]
 
+CHARACTER_CARD_ASSETS = {
+    "beginner": "assets/characters/cards/beginner_card.png",
+    "ace": "assets/characters/cards/ace_card.png",
+    "libero": "assets/characters/cards/libero_card.png",
+    "supporter": "assets/characters/cards/supporter_card.png",
+    "tech": "assets/characters/cards/tech_card.png",
+    "setter": "assets/characters/cards/setter_card.png",
+    "blocker": "assets/characters/cards/blocker_card.png",
+    "rainbow": "assets/characters/cards/rainbow_card.png",
+}
+
+CHARACTER_UNLOCK_CONDITIONS = {
+    "beginner": "初始角色",
+    "ace": "完成 3 次訓練任務",
+    "libero": "完成接球訓練",
+    "supporter": "完成團隊合作任務",
+    "tech": "完成資料紀錄任務",
+    "setter": "完成傳球訓練後開放",
+    "blocker": "完成跳躍訓練後開放",
+    "rainbow": "完成扣球挑戰後開放",
+}
+
 PET_CATALOG_SEED = [
     {"id": "pet_n_01", "display_name": "球球汪", "rarity": "N", "species_note": "排球項圈小狗", "asset_path": "assets/sprites/pets/pet_n_01.png", "active": True, "asset_ready": True, "sort_order": 1},
     {"id": "pet_n_02", "display_name": "啾啾雞", "rarity": "N", "species_note": "穿訓練背心的小雞", "asset_path": "assets/sprites/pets/pet_n_02.png", "active": True, "asset_ready": True, "sort_order": 2},
@@ -881,6 +903,79 @@ def render_pet_card_image(pet: dict, width: int = 210) -> None:
         st.image(card_path, width=width)
     else:
         render_centered_pet_art(pet, width=min(width, 160), height=min(width, 160))
+
+
+def is_avatar_template_unlocked(template: dict | None) -> bool:
+    return bool(template and template.get("active") and template.get("asset_ready"))
+
+
+def _character_card_path(template_id: str | None) -> str | None:
+    if not template_id:
+        return None
+    return _asset_file(CHARACTER_CARD_ASSETS.get(template_id))
+
+
+def render_character_card_image(template: dict, width: int = 260, locked: bool = False) -> None:
+    card_path = _character_card_path(template.get("id"))
+    if card_path:
+        data_uri = _image_data_uri(card_path)
+        if data_uri:
+            overlay_html = ""
+            opacity = "0.42" if locked else "1"
+            if locked:
+                overlay_html = """
+                <div style="
+                    position:absolute;
+                    inset:0;
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                    border-radius:18px;
+                    background:rgba(15,23,42,.34);
+                    color:white;
+                    font-weight:800;
+                    font-size:18px;
+                    letter-spacing:0;
+                    text-shadow:0 2px 8px rgba(0,0,0,.35);
+                ">🔒 未開放</div>
+                """
+            st.markdown(
+                f"""
+                <div style="
+                    position:relative;
+                    width:100%;
+                    max-width:{width}px;
+                    margin:0 auto;
+                ">
+                    <img src="{data_uri}" style="
+                        display:block;
+                        width:100%;
+                        height:auto;
+                        opacity:{opacity};
+                        filter:drop-shadow(0 10px 18px rgba(15,23,42,.16));
+                    " />
+                    {overlay_html}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            return
+        st.image(card_path, width=width)
+        return
+
+    avatar_file = _asset_file(template.get("asset_path"))
+    if avatar_file:
+        st.image(avatar_file, width=min(width, 210))
+    else:
+        st.info("角色素材尚未準備")
+
+
+def _character_option_label(template_id: str, template_lookup: dict[str, dict]) -> str:
+    template = template_lookup.get(template_id, {})
+    label = template.get("display_name", template_id)
+    if not is_avatar_template_unlocked(template):
+        return f"{label} 🔒 未開放"
+    return label
 
 
 def render_icon_asset(icon_key: str, width: int = 44) -> None:
@@ -2693,7 +2788,7 @@ def render_avatar_card(student: dict) -> None:
     st.caption("選擇人物或寵物時會先即時預覽，按儲存後才會寫入角色卡。")
 
     profile = get_avatar_profile(student)
-    templates = get_avatar_templates(active_only=True)
+    templates = get_avatar_templates(active_only=False)
     owned_pets = get_student_pets(student["id"])
 
     if not templates:
@@ -2701,11 +2796,12 @@ def render_avatar_card(student: dict) -> None:
         return
 
     template_lookup = _seed_lookup(templates)
+    unlocked_templates = [t for t in templates if is_avatar_template_unlocked(t)]
     pet_lookup = _seed_lookup(owned_pets)
 
     selected_template_id = profile.get("avatar_template_id") or "beginner"
     if selected_template_id not in template_lookup:
-        selected_template_id = templates[0]["id"]
+        selected_template_id = (unlocked_templates[0] if unlocked_templates else templates[0])["id"]
 
     selected_pet_id = profile.get("companion_pet_id") or (owned_pets[0]["id"] if owned_pets else None)
     if selected_pet_id not in pet_lookup:
@@ -2729,9 +2825,16 @@ def render_avatar_card(student: dict) -> None:
         template_id = st.selectbox(
             "選擇人物",
             template_ids,
-            format_func=lambda tid: template_lookup[tid].get("display_name", tid),
+            format_func=lambda tid: _character_option_label(tid, template_lookup),
             key=template_key,
         )
+        selected_template_for_form = template_lookup.get(template_id)
+        template_locked = not is_avatar_template_unlocked(selected_template_for_form)
+        if template_locked:
+            st.warning(
+                f"🔒 這個角色尚未開放。解鎖條件："
+                f"{CHARACTER_UNLOCK_CONDITIONS.get(template_id, '之後由教練設定')}"
+            )
 
         pet_id = None
         pet_ids = [p["id"] for p in owned_pets]
@@ -2748,7 +2851,7 @@ def render_avatar_card(student: dict) -> None:
         else:
             st.info("還沒有寵物。請先到寵物扭蛋抽一隻，或確認 `student_pets` 表已建立。")
 
-        if st.button("💾 儲存角色卡", type="primary", use_container_width=True):
+        if st.button("💾 儲存角色卡", type="primary", use_container_width=True, disabled=template_locked):
             clean_nickname = new_nickname.strip() or student.get("name") or "小選手"
             if save_avatar_profile(student["id"], clean_nickname, template_id, pet_id):
                 st.success("角色卡已更新！")
@@ -2764,15 +2867,20 @@ def render_avatar_card(student: dict) -> None:
         with st.container(border=True):
             img_col, info_col = st.columns([1, 1])
             with img_col:
-                avatar_file = _asset_file(selected_template.get("asset_path"))
-                if avatar_file:
-                    st.image(avatar_file, width=210)
-                else:
-                    st.info("人物素材尚未準備")
+                render_character_card_image(
+                    selected_template,
+                    width=280,
+                    locked=not is_avatar_template_unlocked(selected_template),
+                )
             with info_col:
                 st.markdown(f"### {nickname}")
                 st.markdown(f"**人物：** {selected_template.get('display_name', selected_template_id)}")
                 st.caption(selected_template.get("role_name", ""))
+                if not is_avatar_template_unlocked(selected_template):
+                    st.warning(
+                        f"🔒 尚未開放："
+                        f"{CHARACTER_UNLOCK_CONDITIONS.get(selected_template.get('id'), '之後由教練設定')}"
+                    )
                 if selected_template.get("catchphrase"):
                     st.info(f"「{selected_template['catchphrase']}」")
 
@@ -2786,6 +2894,19 @@ def render_avatar_card(student: dict) -> None:
                     st.caption(selected_pet.get("species_note", ""))
                 else:
                     st.caption("尚未擁有可攜帶的寵物。")
+
+    st.markdown("### 角色圖鑑")
+    st.caption("未開放角色會先顯示鎖定狀態，之後可依成就條件解鎖。")
+    character_cols = st.columns(4)
+    for idx, template in enumerate(templates):
+        unlocked = is_avatar_template_unlocked(template)
+        with character_cols[idx % 4]:
+            with st.container(border=True):
+                render_character_card_image(template, width=190, locked=not unlocked)
+                lock_label = "" if unlocked else " 🔒"
+                st.markdown(f"**{template.get('display_name', template['id'])}{lock_label}**")
+                st.caption(template.get("role_name", ""))
+                st.caption(CHARACTER_UNLOCK_CONDITIONS.get(template.get("id"), "之後由教練設定"))
 
 
 def render_pet_inventory_and_evolution(student: dict, logs: list[dict], point_events: list[dict]) -> None:
